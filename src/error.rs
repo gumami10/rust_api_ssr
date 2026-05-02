@@ -1,15 +1,19 @@
+use crate::services::users::UserServiceError;
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use serde_json::json;
-use tracing::error;
+use tracing::{debug, error};
 
 #[derive(thiserror::Error, Debug)]
 pub enum AppError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
 
     #[error("Not found: {0}")]
     NotFound(String),
@@ -25,8 +29,12 @@ impl IntoResponse for AppError {
                 error!("Database error: {:?}", err);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
             }
+            AppError::Conflict(msg) => {
+                debug!("Conflict: {}", msg);
+                (StatusCode::CONFLICT, msg.as_str())
+            }
             AppError::NotFound(msg) => {
-                error!("Not found: {}", msg);
+                debug!("Not found: {}", msg);
                 (StatusCode::NOT_FOUND, msg.as_str())
             }
             AppError::Internal => {
@@ -40,5 +48,19 @@ impl IntoResponse for AppError {
         }));
 
         (status, body).into_response()
+    }
+}
+
+impl From<UserServiceError> for AppError {
+    fn from(err: UserServiceError) -> Self {
+        match err {
+            UserServiceError::Database(err) => AppError::Database(err),
+            UserServiceError::DuplicateEmail => {
+                AppError::Conflict("Email already exists.".to_string())
+            }
+            UserServiceError::InvalidCredentials | UserServiceError::PasswordHash(_) => {
+                AppError::Internal
+            }
+        }
     }
 }

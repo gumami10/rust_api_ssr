@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Users{% endblock %}</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            font-family: Inter, "Segoe UI", system-ui, sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(42, 96, 255, 0.22), transparent 30%),
+                radial-gradient(circle at top right, rgba(0, 180, 140, 0.18), transparent 24%),
+                linear-gradient(180deg, #09111f 0%, #0d1426 100%);
+            color: #f4f7fb;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            padding: 1.5rem;
+        }
+
+        main {
+            max-width: 72rem;
+            margin: 0 auto;
+        }
+
+        a {
+            color: #8fd3ff;
+            text-decoration: none;
+        }
+
+        h1 {
+            color: #ffffff;
+            margin-top: 0;
+            letter-spacing: -0.03em;
+        }
+
+        nav {
+            align-items: center;
+            backdrop-filter: blur(14px);
+            background: rgba(9, 17, 31, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+            padding: 1rem 1.25rem;
+        }
+
+        .actions {
+            display: flex;
+            gap: 0.75rem;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+
+        .button,
+        button {
+            appearance: none;
+            background: linear-gradient(135deg, #4c8dff, #2dd4bf);
+            border: 0;
+            border-radius: 999px;
+            color: #04111c;
+            cursor: pointer;
+            display: inline-flex;
+            font: inherit;
+            font-weight: 700;
+            line-height: 1;
+            padding: 0.8rem 1.1rem;
+            text-decoration: none;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        li,
+        .panel {
+            background: rgba(16, 24, 40, 0.82);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            margin-bottom: 0.75rem;
+            padding: 1rem 1.1rem;
+        }
+
+        .email {
+            color: #9ca8bc;
+            font-size: 0.9em;
+        }
+
+        .muted {
+            color: #a9b4c8;
+        }
+
+        label {
+            display: block;
+            font-weight: 700;
+            margin-bottom: 0.35rem;
+        }
+
+        input {
+            background: rgba(5, 9, 18, 0.82);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            box-sizing: border-box;
+            color: inherit;
+            font: inherit;
+            margin-bottom: 0.5rem;
+            padding: 0.7rem;
+            width: 100%;
+        }
+
+        .field {
+            margin-bottom: 1rem;
+        }
+
+        .error {
+            color: #ff9d9d;
+            margin: 0.25rem 0 0;
+        }
+
+        .hero {
+            background: linear-gradient(135deg, rgba(76, 141, 255, 0.18), rgba(45, 212, 191, 0.12));
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            margin-bottom: 1.25rem;
+            padding: 1.25rem;
+        }
+
+        .chat-shell {
+            display: grid;
+            gap: 1rem;
+            grid-template-columns: 1fr 20rem;
+        }
+
+        .chat-stream {
+            min-height: 24rem;
+        }
+
+        .chat-message {
+            display: grid;
+            gap: 0.25rem;
+        }
+
+        .chat-meta {
+            color: #8ca2bf;
+            font-size: 0.85rem;
+        }
+
+        .stack {
+            display: grid;
+            gap: 0.75rem;
+        }
+
+        @media (max-width: 860px) {
+            .chat-shell {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <nav>
+            <strong>Live Chat</strong>
+            <div class="actions" style="margin:0">
+                <a href="/users">Users</a>
+                <a href="/chat">Chat</a>
+                <a href="/login">Login</a>
+            </div>
+        </nav>
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

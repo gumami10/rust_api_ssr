@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Users List{% endblock %}
+
+{% block content %}
+    <div class="hero">
+        <h1>Users</h1>
+        <p class="muted">Create an account with a password, then log into the shared live chat.</p>
+        <div class="actions">
+            <a class="button" href="/users/new">Create account</a>
+            <a class="button" href="/login">Login to chat</a>
+            <a class="button" href="/chat">Open chat</a>
+        </div>
+    </div>
+
+    {% if users.is_empty() %}
+        <p>No users found.</p>
+    {% else %}
+        <ul>
+            {% for user in users %}
+                <li>
+                    <a href="/users/{{ user.id }}"><strong>{{ user.name }}</strong></a>
+                    <br>
+                    <span class="email">{{ user.email }}</span>
+                </li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}

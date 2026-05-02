@@ -11,6 +11,7 @@ use rust_api_ssr::{
 use serde_json::{json, Value};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 async fn test_app() -> Router {
@@ -25,7 +26,8 @@ async fn test_app() -> Router {
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
-            email TEXT NOT NULL
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL
         )
         "#,
     )
@@ -35,22 +37,48 @@ async fn test_app() -> Router {
 
     sqlx::query(
         r#"
-        INSERT INTO users (name, email)
-        VALUES ('Alice', 'alice@example.com'), ('Bob', 'bob@example.com')
+        INSERT INTO users (name, email, password_hash)
+        VALUES ('Alice', 'alice@example.com', 'alice-hash'), ('Bob', 'bob@example.com', 'bob-hash')
         "#,
     )
     .execute(&pool)
     .await
     .expect("seed users");
 
-    let user_repo = Arc::new(SqliteUserRepository::new(pool));
-    create_router(AppState { user_repo })
+    let user_repo = Arc::new(SqliteUserRepository::new(pool.clone()));
+    let (chat_tx, _) = broadcast::channel(100);
+    create_router(AppState {
+        user_repo,
+        pool,
+        chat_tx,
+    })
 }
 
 async fn get(app: Router, uri: &str) -> (StatusCode, Vec<u8>) {
     let response = app
         .oneshot(
             Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("route request");
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body")
+        .to_vec();
+
+    (status, body)
+}
+
+async fn delete(app: Router, uri: &str) -> (StatusCode, Vec<u8>) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
                 .uri(uri)
                 .body(Body::empty())
                 .expect("build request"),
@@ -103,6 +131,21 @@ async fn get_user_returns_not_found_json_for_missing_user() {
 
     let error: Value = serde_json::from_slice(&body).expect("valid error json");
     assert_eq!(error, json!({ "error": "User with id 999 not found" }));
+}
+
+#[tokio::test]
+async fn delete_user_returns_no_content_and_removes_user() {
+    let app = test_app().await;
+    let (status, body) = delete(app.clone(), "/api/users/1").await;
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
+
+    let (status, body) = get(app, "/api/users/1").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let error: Value = serde_json::from_slice(&body).expect("valid error json");
+    assert_eq!(error, json!({ "error": "User with id 1 not found" }));
 }
 
 #[tokio::test]

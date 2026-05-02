@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}{{ user.name }}{% endblock %}
+
+{% block content %}
+    <h1>{{ user.name }}</h1>
+    <div class="panel">
+        <p class="email">{{ user.email }}</p>
+        <p class="muted">This account can join the live chat after login.</p>
+    </div>
+    <div class="actions">
+        <a class="button" href="/users/{{ user.id }}/edit">Edit user</a>
+        <a class="button" href="/login">Login to chat</a>
+        <form method="post" action="/users/{{ user.id }}/delete">
+            <button type="submit">Delete user</button>
+        </form>
+        <a href="/users">Back to users</a>
+    </div>
+{% endblock %}

@@ -1,8 +1,11 @@
 use rust_api_ssr::app::create_router;
+use rust_api_ssr::config::Config;
 use rust_api_ssr::handlers::AppState;
 use rust_api_ssr::models::user::SqliteUserRepository;
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::str::FromStr;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -11,49 +14,70 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "rust_api_ssr=debug,axum=debug".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "rust_api_ssr=info,axum=warn".into()),
         ))
         .with(tracing_subscriber::fmt::layer().json())
         .init();
 
-    info!("Connecting to database...");
+    let config = Config::from_env();
 
-    // In-memory sqlite for demonstration, or could be a file like sqlite://data.db
+    info!("Connecting to database...");
+    let connect_options =
+        SqliteConnectOptions::from_str(&config.database_url)?.create_if_missing(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect("sqlite::memory:")
+        .connect_with(connect_options)
         .await?;
 
-    // Create table for demo
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await?;
+    ensure_schema(&pool).await?;
 
-    // Insert dummy data
-    sqlx::query("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com'), ('Bob', 'bob@example.com')")
-        .execute(&pool)
-        .await?;
-
-    let user_repo = Arc::new(SqliteUserRepository::new(pool));
-    let state = AppState { user_repo };
+    let user_repo = Arc::new(SqliteUserRepository::new(pool.clone()));
+    let (chat_tx, _) = broadcast::channel(100);
+    let state = AppState {
+        user_repo,
+        pool: pool.clone(),
+        chat_tx,
+    };
 
     let app = create_router(state);
 
-    let addr = "0.0.0.0:3000";
-    let listener = TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(&config.bind_address).await?;
 
-    // Set socket options for TCP_NODELAY (usually Axum does this by default or it's accessible via Hyper, but tokio TcpListener doesn't have a direct builder for it until connection, wait, let's keep it simple and just log start)
+    info!("Listening on {}", config.bind_address);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
-    info!("Listening on {}", addr);
-    axum::serve(listener, app).await?;
+    Ok(())
+}
 
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install terminate signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received");
+}
+
+async fn ensure_schema(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::migrate!("./migrations").run(pool).await?;
     Ok(())
 }

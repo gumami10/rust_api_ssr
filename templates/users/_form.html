@@ -1,0 +1,39 @@
+<form method="post" action="{{ form.action }}">
+    <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" value="{{ form.name }}" autocomplete="name">
+        {% match form.name_error %}
+        {% when Some with (message) %}
+            <p class="error">{{ message }}</p>
+        {% when None %}
+        {% endmatch %}
+    </div>
+
+    <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" value="{{ form.email }}" autocomplete="email">
+        {% match form.email_error %}
+        {% when Some with (message) %}
+            <p class="error">{{ message }}</p>
+        {% when None %}
+        {% endmatch %}
+    </div>
+
+    {% if form.show_password %}
+    <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" minlength="8">
+        <p class="muted">Use this password to log into chat.</p>
+        {% match form.password_error %}
+        {% when Some with (message) %}
+            <p class="error">{{ message }}</p>
+        {% when None %}
+        {% endmatch %}
+    </div>
+    {% endif %}
+
+    <div class="actions">
+        <button type="submit">{{ form.submit_label }}</button>
+        <a href="/users">Cancel</a>
+    </div>
+</form>

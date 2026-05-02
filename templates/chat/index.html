@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Chat{% endblock %}
+
+{% block content %}
+    <div class="hero">
+        <h1>Live Chat</h1>
+        <p class="muted">Signed in as <strong>{{ user.name }}</strong>. Messages appear instantly for every logged-in user.</p>
+        <div class="actions">
+            <form method="post" action="/logout">
+                <button type="submit">Logout</button>
+            </form>
+            <a class="button" href="/users">Back to users</a>
+        </div>
+    </div>
+
+    <div class="chat-shell">
+        <section class="panel chat-stream">
+            <ul id="chat-messages" class="stack">
+                {% for message in messages %}
+                    <li class="chat-message" data-message-id="{{ message.id }}">
+                        <strong>{{ message.user_name }}</strong>
+                        <span>{{ message.body }}</span>
+                        <span class="chat-meta">{{ message.created_at }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        </section>
+
+        <aside class="panel">
+            <form id="chat-form" class="stack">
+                <div class="field">
+                    <label for="chat-body">Send a message</label>
+                    <input id="chat-body" name="body" autocomplete="off" placeholder="Type a message">
+                </div>
+                <button type="submit">Send</button>
+            </form>
+            <p class="muted">The page connects over websocket and keeps every logged-in browser in sync.</p>
+        </aside>
+    </div>
+
+    <script>
+        (() => {
+            const messages = document.getElementById("chat-messages");
+            const form = document.getElementById("chat-form");
+            const bodyInput = document.getElementById("chat-body");
+            const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+            const socket = new WebSocket(`${scheme}://${window.location.host}/chat/ws`);
+
+            const appendMessage = (message) => {
+                if (!message || !message.body) {
+                    return;
+                }
+
+                const item = document.createElement("li");
+                item.className = "chat-message";
+                item.innerHTML = `
+                    <strong>${escapeHtml(message.user_name || "Guest")}</strong>
+                    <span>${escapeHtml(message.body)}</span>
+                    <span class="chat-meta">${escapeHtml(message.created_at || "")}</span>
+                `;
+                messages.appendChild(item);
+                messages.scrollTop = messages.scrollHeight;
+            };
+
+            const escapeHtml = (value) => String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+
+            socket.addEventListener("message", (event) => {
+                try {
+                    appendMessage(JSON.parse(event.data));
+                } catch (_) {
+                    // Ignore malformed frames.
+                }
+            });
+
+            form.addEventListener("submit", (event) => {
+                event.preventDefault();
+                const body = bodyInput.value.trim();
+                if (!body || socket.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+
+                socket.send(JSON.stringify({ body }));
+                bodyInput.value = "";
+                bodyInput.focus();
+            });
+        })();
+    </script>
+{% endblock %}

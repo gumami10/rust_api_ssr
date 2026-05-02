@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block title %}New User{% endblock %}
+
+{% block content %}
+    <h1>New User</h1>
+    <p class="muted">Passwords are required so the user can log into chat.</p>
+    {% include "users/_form.html" %}
+{% endblock %}

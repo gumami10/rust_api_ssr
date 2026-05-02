@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block title %}Edit User{% endblock %}
+
+{% block content %}
+    <h1>Edit User</h1>
+    <p class="muted">Editing the profile does not change the chat password.</p>
+    {% include "users/_form.html" %}
+{% endblock %}
