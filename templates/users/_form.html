@@ -1,39 +1,66 @@
 <form method="post" action="{{ form.action }}">
-    <div class="field">
-        <label for="name">Name</label>
-        <input id="name" name="name" value="{{ form.name }}" autocomplete="name">
-        {% match form.name_error %}
-        {% when Some with (message) %}
-            <p class="error">{{ message }}</p>
-        {% when None %}
-        {% endmatch %}
-    </div>
+    <div class="space-y-6">
+        <div class="space-y-2">
+            <label class="text-sm font-semibold text-slate-200" for="name">Name</label>
+            <div class="relative">
+                <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 pr-12 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="name" name="name" value="{{ form.name }}" autocomplete="name">
+                {% if form.show_password %}
+                <button class="absolute right-2 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-cyan-100" type="button" data-faker-fill data-faker-target="name" aria-label="Fill name with mock data" title="Fill with mock data">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 fill-current">
+                        <path d="M20 4H8a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2h1a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V6a2 2 0 0 0-2-2ZM8 8V6h12v12h-1v-2a2 2 0 0 0-2-2H7v-4h1Zm9 10H7v2h10v-2Zm3-8v6h-1v-3a2 2 0 0 0-2-2H7V8h13Z"/>
+                    </svg>
+                </button>
+                {% endif %}
+            </div>
+            {% match form.name_error %}
+            {% when Some with (message) %}
+                <p class="text-sm text-rose-300">{{ message }}</p>
+            {% when None %}
+            {% endmatch %}
+        </div>
 
-    <div class="field">
-        <label for="email">Email</label>
-        <input id="email" name="email" type="email" value="{{ form.email }}" autocomplete="email">
-        {% match form.email_error %}
-        {% when Some with (message) %}
-            <p class="error">{{ message }}</p>
-        {% when None %}
-        {% endmatch %}
-    </div>
+        <div class="space-y-2">
+            <label class="text-sm font-semibold text-slate-200" for="email">Email</label>
+            <div class="relative">
+                <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 pr-12 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="email" name="email" type="email" value="{{ form.email }}" autocomplete="email">
+                {% if form.show_password %}
+                <button class="absolute right-2 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-cyan-100" type="button" data-faker-fill data-faker-target="email" aria-label="Fill email with mock data" title="Fill with mock data">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 fill-current">
+                        <path d="M20 4H8a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2h1a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V6a2 2 0 0 0-2-2ZM8 8V6h12v12h-1v-2a2 2 0 0 0-2-2H7v-4h1Zm9 10H7v2h10v-2Zm3-8v6h-1v-3a2 2 0 0 0-2-2H7V8h13Z"/>
+                    </svg>
+                </button>
+                {% endif %}
+            </div>
+            {% match form.email_error %}
+            {% when Some with (message) %}
+                <p class="text-sm text-rose-300">{{ message }}</p>
+            {% when None %}
+            {% endmatch %}
+        </div>
 
-    {% if form.show_password %}
-    <div class="field">
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="new-password" minlength="8">
-        <p class="muted">Use this password to log into chat.</p>
-        {% match form.password_error %}
-        {% when Some with (message) %}
-            <p class="error">{{ message }}</p>
-        {% when None %}
-        {% endmatch %}
-    </div>
-    {% endif %}
+        {% if form.show_password %}
+        <div class="space-y-2">
+            <label class="text-sm font-semibold text-slate-200" for="password">Password</label>
+            <div class="relative">
+                <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 pr-12 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="password" name="password" type="password" autocomplete="new-password" minlength="8">
+                <button class="absolute right-2 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-cyan-100" type="button" data-faker-fill data-faker-target="password" aria-label="Fill password with mock data" title="Fill with mock data">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 fill-current">
+                        <path d="M20 4H8a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2h1a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V6a2 2 0 0 0-2-2ZM8 8V6h12v12h-1v-2a2 2 0 0 0-2-2H7v-4h1Zm9 10H7v2h10v-2Zm3-8v6h-1v-3a2 2 0 0 0-2-2H7V8h13Z"/>
+                    </svg>
+                </button>
+            </div>
+            <p class="text-sm text-slate-400">Use this password to log into chat.</p>
+            {% match form.password_error %}
+            {% when Some with (message) %}
+                <p class="text-sm text-rose-300">{{ message }}</p>
+            {% when None %}
+            {% endmatch %}
+        </div>
+        {% endif %}
 
-    <div class="actions">
-        <button type="submit">{{ form.submit_label }}</button>
-        <a href="/users">Cancel</a>
+        <div class="flex flex-wrap gap-3 pt-2">
+            <button class="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">{{ form.submit_label }}</button>
+            <a class="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10" href="/users">Cancel</a>
+        </div>
     </div>
 </form>

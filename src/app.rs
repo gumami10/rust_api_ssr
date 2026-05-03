@@ -22,9 +22,19 @@ pub fn create_router(state: AppState) -> Router {
         .route("/login", get(crate::handlers::auth::render_login).post(crate::handlers::auth::login))
         .route("/logout", post(crate::handlers::auth::logout))
         .route("/chat", get(crate::handlers::chat::render_chat))
+        .route("/chat/rooms", post(crate::handlers::chat::create_chat_room))
+        .route("/chat/rooms/:id", get(crate::handlers::chat::render_chat_room))
+        .route(
+            "/chat/rooms/:id/invites",
+            post(crate::handlers::chat::invite_to_room),
+        )
+        .route(
+            "/chat/invites/:id/accept",
+            post(crate::handlers::chat::accept_invite),
+        )
         .route("/chat/ws", get(crate::handlers::chat::chat_ws))
         .route("/api/users", get(api::list_users))
         .route("/api/users/:id", get(api::get_user).delete(api::delete_user))
-        .layer(middleware::from_fn(log_request_latency))
+        .layer(middleware::from_fn_with_state(state.clone(), log_request_latency))
         .with_state(state)
 }

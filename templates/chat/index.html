@@ -3,49 +3,212 @@
 {% block title %}Chat{% endblock %}
 
 {% block content %}
-    <div class="hero">
-        <h1>Live Chat</h1>
-        <p class="muted">Signed in as <strong>{{ user.name }}</strong>. Messages appear instantly for every logged-in user.</p>
-        <div class="actions">
-            <form method="post" action="/logout">
-                <button type="submit">Logout</button>
-            </form>
-            <a class="button" href="/users">Back to users</a>
-        </div>
-    </div>
+    <section class="space-y-6">
+        <div class="rounded-3xl border border-white/10 bg-gradient-to-br from-slate-900/90 to-slate-900/60 p-6 shadow-glow shadow-slate-950/40 sm:p-8">
+            <p class="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300/80">Realtime</p>
+            <h1 class="mt-3 text-4xl font-black tracking-tight text-white sm:text-5xl">Chat rooms</h1>
+            <p class="mt-4 max-w-3xl text-base leading-7 text-slate-300">
+                Signed in as <strong class="text-white">{{ user.name }}</strong>.
+                The general room is open to every logged-in user, while private rooms stay limited to invited participants.
+            </p>
 
-    <div class="chat-shell">
-        <section class="panel chat-stream">
-            <ul id="chat-messages" class="stack">
-                {% for message in messages %}
-                    <li class="chat-message" data-message-id="{{ message.id }}">
-                        <strong>{{ message.user_name }}</strong>
-                        <span>{{ message.body }}</span>
-                        <span class="chat-meta">{{ message.created_at }}</span>
-                    </li>
-                {% endfor %}
-            </ul>
-        </section>
-
-        <aside class="panel">
-            <form id="chat-form" class="stack">
-                <div class="field">
-                    <label for="chat-body">Send a message</label>
-                    <input id="chat-body" name="body" autocomplete="off" placeholder="Type a message">
+            {% match error %}
+            {% when Some with (message) %}
+                <div class="mt-5 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                    {{ message }}
                 </div>
-                <button type="submit">Send</button>
-            </form>
-            <p class="muted">The page connects over websocket and keeps every logged-in browser in sync.</p>
-        </aside>
-    </div>
+            {% when None %}
+            {% endmatch %}
+
+            <div class="mt-6 flex flex-wrap gap-3">
+                <form method="post" action="/logout">
+                    <button class="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-rose-400/40 hover:bg-rose-400/10 hover:text-rose-100" type="submit">Logout</button>
+                </form>
+                <a class="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" href="/users">Back to users</a>
+            </div>
+        </div>
+
+        <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <section class="rounded-3xl border border-white/10 bg-slate-900/75 p-4 shadow-lg shadow-slate-950/25 sm:p-6">
+                <div class="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                        <p class="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-300/80">Room</p>
+                        <h2 class="mt-2 text-2xl font-black tracking-tight text-white">{{ room.name }}</h2>
+                    </div>
+                    <span class="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">
+                        {% if room.is_general %}General{% else %}Private{% endif %}
+                    </span>
+                </div>
+
+                <ul id="chat-messages" class="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+                    {% for message in messages %}
+                        <li class="rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20" data-message-id="{{ message.id }}">
+                            <div class="flex items-center justify-between gap-3">
+                                <strong class="text-sm font-semibold text-cyan-200">{{ message.user_name }}</strong>
+                                <span class="text-xs text-slate-500">{{ message.created_at }}</span>
+                            </div>
+                            <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">{{ message.body }}</p>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </section>
+
+            <aside class="space-y-4 rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-lg shadow-slate-950/25">
+                <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Rooms</h3>
+                        <span class="text-xs text-slate-500">{{ rooms.len() }}</span>
+                    </div>
+                    <ul class="space-y-2">
+                        {% for room_item in rooms %}
+                            <li>
+                                <a
+                                    class="flex items-center justify-between gap-3 rounded-2xl border px-3 py-2 transition
+                                           {% if room_item.is_active %}border-cyan-400/40 bg-cyan-400/10 text-white{% else %}border-white/10 bg-white/5 text-slate-200 hover:border-cyan-400/30 hover:bg-cyan-400/10{% endif %}"
+                                    href="{{ room_item.path }}"
+                                >
+                                    <span class="min-w-0 truncate text-sm font-medium">{{ room_item.name }}</span>
+                                    <span class="rounded-full border border-white/10 bg-slate-950/60 px-2 py-0.5 text-xs text-slate-400">{{ room_item.participant_count }}</span>
+                                </a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </section>
+
+                <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                    <form id="chat-form" class="space-y-4">
+                        <div class="space-y-2">
+                            <label class="text-sm font-semibold text-slate-200" for="chat-body">Send a message</label>
+                            <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="chat-body" name="body" autocomplete="off" placeholder="Type a message">
+                        </div>
+                        <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">Send</button>
+                    </form>
+                    <p class="text-sm leading-6 text-slate-400">Messages go only to the room you are currently viewing.</p>
+                </section>
+
+                <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Participants</h3>
+                        <span class="text-xs text-slate-500">{{ participants.len() }}</span>
+                    </div>
+
+                    {% if participants.is_empty() %}
+                        <p class="text-sm leading-6 text-slate-400">
+                            {% if room.is_general %}
+                                The general chat is available to every logged-in user.
+                            {% else %}
+                                No participants were loaded for this room yet.
+                            {% endif %}
+                        </p>
+                    {% else %}
+                        <ul class="space-y-2">
+                            {% for participant in participants %}
+                                <li class="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                                    <strong class="block text-sm text-slate-100">{{ participant.name }}</strong>
+                                    <span class="block text-xs text-slate-400">{{ participant.email }}</span>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                </section>
+
+                {% if !room.is_general %}
+                    <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                        <div>
+                            <h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Invite user</h3>
+                            <p class="mt-2 text-sm leading-6 text-slate-400">Only someone already in this room can send another invitation.</p>
+                        </div>
+
+                        {% if available_invitees.is_empty() %}
+                            <p class="text-sm text-slate-400">There is nobody else left to invite right now.</p>
+                        {% else %}
+                            <form method="post" action="/chat/rooms/{{ room.id }}/invites" class="space-y-3">
+                                <label class="block text-sm font-semibold text-slate-200" for="invite-user-id">Choose user</label>
+                                <select class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="invite-user-id" name="user_id">
+                                    {% for candidate in available_invitees %}
+                                        <option value="{{ candidate.id }}">{{ candidate.name }} ({{ candidate.email }})</option>
+                                    {% endfor %}
+                                </select>
+                                <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">Send invite</button>
+                            </form>
+                        {% endif %}
+                    </section>
+                {% endif %}
+
+                <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                    <div>
+                        <h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Create private room</h3>
+                        <p class="mt-2 text-sm leading-6 text-slate-400">Pick at least one other user. The room is created with you and the selected participants.</p>
+                    </div>
+
+                    {% if all_users.is_empty() %}
+                        <p class="text-sm text-slate-400">There are no other users available yet.</p>
+                    {% else %}
+                        <form method="post" action="/chat/rooms" class="space-y-4">
+                            <div class="space-y-2">
+                                <label class="block text-sm font-semibold text-slate-200" for="room-name">Room name</label>
+                                <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="room-name" name="name" autocomplete="off" placeholder="Optional custom name">
+                            </div>
+
+                            <input type="hidden" id="room-participant-ids" name="participant_ids" value="">
+
+                            <div class="space-y-2">
+                                <span class="block text-sm font-semibold text-slate-200">Participants</span>
+                                <div class="max-h-52 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/70 p-3">
+                                    {% for candidate in all_users %}
+                                        <label class="flex items-center gap-3 rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-sm text-slate-200">
+                                            <input class="h-4 w-4 rounded border-white/20 bg-slate-950 text-cyan-400 focus:ring-cyan-400/30" type="checkbox" data-participant-checkbox value="{{ candidate.id }}">
+                                            <span class="min-w-0">
+                                                <span class="block font-medium">{{ candidate.name }}</span>
+                                                <span class="block text-xs text-slate-400">{{ candidate.email }}</span>
+                                            </span>
+                                        </label>
+                                    {% endfor %}
+                                </div>
+                            </div>
+
+                            <button class="inline-flex w-full items-center justify-center rounded-full border border-cyan-400/20 bg-cyan-400/10 px-5 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/20" type="submit">Create room</button>
+                        </form>
+                    {% endif %}
+                </section>
+
+                <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Invitations</h3>
+                        <span class="text-xs text-slate-500">{{ pending_invites.len() }}</span>
+                    </div>
+
+                    {% if pending_invites.is_empty() %}
+                        <p class="text-sm leading-6 text-slate-400">You do not have any pending room invitations.</p>
+                    {% else %}
+                        <ul class="space-y-2">
+                            {% for invite in pending_invites %}
+                                <li class="rounded-2xl border border-white/10 bg-white/5 p-3">
+                                    <div class="space-y-1">
+                                        <strong class="block text-sm text-slate-100">{{ invite.room_name }}</strong>
+                                        <span class="block text-xs text-slate-400">Invited by {{ invite.invited_by_name }} at {{ invite.created_at }}</span>
+                                    </div>
+                                    <form class="mt-3" method="post" action="{{ invite.accept_path }}">
+                                        <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:scale-[1.01]" type="submit">Accept</button>
+                                    </form>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                </section>
+            </aside>
+        </div>
+    </section>
 
     <script>
         (() => {
             const messages = document.getElementById("chat-messages");
+            const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+            const socket = new WebSocket(`${scheme}://${window.location.host}/chat/ws?room_id={{ room.id }}`);
             const form = document.getElementById("chat-form");
             const bodyInput = document.getElementById("chat-body");
-            const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-            const socket = new WebSocket(`${scheme}://${window.location.host}/chat/ws`);
+            const createRoomForm = document.querySelector('form[action="/chat/rooms"]');
+            const roomParticipantIds = document.getElementById("room-participant-ids");
 
             const appendMessage = (message) => {
                 if (!message || !message.body) {
@@ -53,11 +216,13 @@
                 }
 
                 const item = document.createElement("li");
-                item.className = "chat-message";
+                item.className = "rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20";
                 item.innerHTML = `
-                    <strong>${escapeHtml(message.user_name || "Guest")}</strong>
-                    <span>${escapeHtml(message.body)}</span>
-                    <span class="chat-meta">${escapeHtml(message.created_at || "")}</span>
+                    <div class="flex items-center justify-between gap-3">
+                        <strong class="text-sm font-semibold text-cyan-200">${escapeHtml(message.user_name || "Guest")}</strong>
+                        <span class="text-xs text-slate-500">${escapeHtml(message.created_at || "")}</span>
+                    </div>
+                    <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">${escapeHtml(message.body)}</p>
                 `;
                 messages.appendChild(item);
                 messages.scrollTop = messages.scrollHeight;
@@ -78,17 +243,28 @@
                 }
             });
 
-            form.addEventListener("submit", (event) => {
-                event.preventDefault();
-                const body = bodyInput.value.trim();
-                if (!body || socket.readyState !== WebSocket.OPEN) {
-                    return;
-                }
+            if (form && bodyInput) {
+                form.addEventListener("submit", (event) => {
+                    event.preventDefault();
+                    const body = bodyInput.value.trim();
+                    if (!body || socket.readyState !== WebSocket.OPEN) {
+                        return;
+                    }
 
-                socket.send(JSON.stringify({ body }));
-                bodyInput.value = "";
-                bodyInput.focus();
-            });
+                    socket.send(JSON.stringify({ body }));
+                    bodyInput.value = "";
+                    bodyInput.focus();
+                });
+            }
+
+            if (createRoomForm && roomParticipantIds) {
+                createRoomForm.addEventListener("submit", () => {
+                    const selectedIds = Array.from(
+                        createRoomForm.querySelectorAll('input[data-participant-checkbox]:checked')
+                    ).map((checkbox) => checkbox.value);
+                    roomParticipantIds.value = selectedIds.join(",");
+                });
+            }
         })();
     </script>
 {% endblock %}

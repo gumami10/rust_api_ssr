@@ -1,6 +1,6 @@
 use rust_api_ssr::app::create_router;
 use rust_api_ssr::config::Config;
-use rust_api_ssr::handlers::AppState;
+use rust_api_ssr::handlers::{AppState, RequestMetrics};
 use rust_api_ssr::models::user::SqliteUserRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         user_repo,
         pool: pool.clone(),
         chat_tx,
+        request_metrics: RequestMetrics::default(),
     };
 
     let app = create_router(state);

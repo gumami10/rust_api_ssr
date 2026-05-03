@@ -2,7 +2,7 @@
 
 A small Rust API + server-side rendered web app built around fast response times and low operational overhead.
 
-The project uses Axum on Tokio for async HTTP handling, Askama for compile-time checked HTML templates, and SQLx with SQLite for the demo data layer. It currently serves a minimal users API and an SSR users page from the same router.
+The project uses Axum on Tokio for async HTTP handling, Askama for compile-time checked HTML templates, and SQLx with SQLite for the demo data layer. It currently serves a minimal users API, an SSR users page, and invite-only chat rooms from the same router.
 
 ## Goals
 
@@ -17,6 +17,9 @@ The project uses Axum on Tokio for async HTTP handling, Askama for compile-time 
 - `GET /` renders the users list as HTML with Askama.
 - `GET /api/users` returns all users as JSON.
 - `GET /api/users/:id` returns one user as JSON.
+- `GET /chat` renders the general chat room.
+- `GET /chat/rooms/:id` renders an invite-only room for participants.
+- `POST /chat/rooms` creates a private room with at least two participants.
 - Missing users return a structured JSON `404` response.
 - Request latency is logged by middleware.
 - Integration tests cover the API routes and SSR page.
@@ -52,6 +55,7 @@ templates/
 tests/
   api_integration.rs   # route integration tests
 scripts/
+  k6-load-test.js     # k6 load test for read-only API and SSR routes
   manual_api_test.py   # manual HTTP tester
 ```
 
@@ -74,6 +78,23 @@ http://127.0.0.1:3000
 
 The binary currently binds to `0.0.0.0:3000`, so it is also reachable from other interfaces where allowed by your environment.
 
+## Docker
+
+Build and run the app in a container:
+
+```bash
+docker build -t rust_api_ssr .
+docker run --rm -p 3000:3000 rust_api_ssr
+```
+
+Or use Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+The container uses the checked-in `data.db` file by default so the demo users remain available on first start.
+
 ## Test
 
 Run the Rust integration tests:
@@ -95,6 +116,18 @@ python3 scripts/manual_api_test.py --start-server list-users
 python3 scripts/manual_api_test.py --start-server get-user 1
 python3 scripts/manual_api_test.py --start-server index
 python3 scripts/manual_api_test.py --start-server interactive
+```
+
+Run the k6 load test:
+
+```bash
+k6 run scripts/k6-load-test.js
+```
+
+You can point it at another instance and tune the load with env vars:
+
+```bash
+BASE_URL=http://127.0.0.1:3000 API_VUS=20 SSR_VUS=10 k6 run scripts/k6-load-test.js
 ```
 
 ## API
@@ -141,6 +174,8 @@ If the user does not exist:
 ## SSR Page
 
 `GET /` renders `templates/index.html` with the same users loaded through the repository layer. Askama compiles the template at build time, which keeps rendering fast and catches many template mistakes before runtime.
+
+`GET /chat` renders the general room, and private rooms are available only to participants who were added at creation time or invited later by someone already in the room.
 
 ## Latency-Oriented Design Notes
 

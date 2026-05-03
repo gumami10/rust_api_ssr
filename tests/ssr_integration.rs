@@ -5,7 +5,7 @@ use axum::{
 };
 use rust_api_ssr::{
     app::create_router,
-    handlers::AppState,
+    handlers::{AppState, RequestMetrics},
     models::user::SqliteUserRepository,
     services::users::hash_password,
 };
@@ -50,8 +50,66 @@ async fn test_app() -> Router {
 
     sqlx::query(
         r#"
+        CREATE TABLE chat_rooms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            created_by_user_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create chat_rooms table");
+
+    sqlx::query(
+        r#"
+        INSERT INTO chat_rooms (id, name, kind, created_by_user_id)
+        VALUES (1, 'General', 'general', NULL)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("seed general room");
+
+    sqlx::query(
+        r#"
+        CREATE TABLE chat_room_members (
+            room_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (room_id, user_id)
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create chat_room_members table");
+
+    sqlx::query(
+        r#"
+        CREATE TABLE chat_room_invites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id INTEGER NOT NULL,
+            invited_user_id INTEGER NOT NULL,
+            invited_by_user_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            accepted_at TEXT,
+            UNIQUE (room_id, invited_user_id)
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create chat_room_invites table");
+
+    sqlx::query(
+        r#"
         CREATE TABLE chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             body TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -87,26 +145,34 @@ async fn test_app() -> Router {
         user_repo,
         pool,
         chat_tx,
+        request_metrics: RequestMetrics::default(),
     })
 }
 
-async fn request(app: Router, request: Request<Body>) -> (StatusCode, Vec<u8>, Option<String>) {
+async fn request(
+    app: Router,
+    request: Request<Body>,
+) -> (StatusCode, Vec<u8>, Option<String>, Option<String>) {
     let response = app.oneshot(request).await.expect("route request");
     let status = response.status();
     let location = response
         .headers()
         .get(header::LOCATION)
         .map(|value| value.to_str().expect("valid location").to_string());
+    let set_cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .map(|value| value.to_str().expect("valid cookie").to_string());
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body")
         .to_vec();
 
-    (status, body, location)
+    (status, body, location, set_cookie)
 }
 
 async fn get(app: Router, uri: &str) -> (StatusCode, Vec<u8>) {
-    let (status, body, _) = request(
+    let (status, body, _, _) = request(
         app,
         Request::builder()
             .uri(uri)
@@ -119,7 +185,7 @@ async fn get(app: Router, uri: &str) -> (StatusCode, Vec<u8>) {
 }
 
 async fn post_form(app: Router, uri: &str, form: &str) -> (StatusCode, Vec<u8>, Option<String>) {
-    request(
+    let (status, body, location, _) = request(
         app,
         Request::builder()
             .method("POST")
@@ -128,7 +194,17 @@ async fn post_form(app: Router, uri: &str, form: &str) -> (StatusCode, Vec<u8>, 
             .body(Body::from(form.to_string()))
             .expect("build request"),
     )
-    .await
+    .await;
+
+    (status, body, location)
+}
+
+fn cookie_value(set_cookie: &str) -> String {
+    set_cookie
+        .split(';')
+        .next()
+        .expect("cookie value")
+        .to_string()
 }
 
 #[tokio::test]
@@ -211,6 +287,42 @@ async fn valid_create_redirects_to_created_user() {
 }
 
 #[tokio::test]
+async fn valid_create_logs_the_new_user_in() {
+    let app = test_app().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/users")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "name=Carol&email=carol%40example.com&password=carol-pass".to_string(),
+        ))
+        .expect("build request");
+
+    let (status, _, location, set_cookie) = request(app.clone(), req).await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/users/3"));
+
+    let cookie = cookie_value(set_cookie.as_deref().expect("set cookie"));
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri("/users/3")
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .expect("build request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let html = String::from_utf8(body).expect("valid utf-8 html");
+    assert!(html.contains("Logout"));
+    assert!(html.contains("See profile: Carol"));
+    assert!(!html.contains(r#"href="/login">Login"#));
+}
+
+#[tokio::test]
 async fn edit_user_form_updates_existing_user() {
     let (status, body) = get(test_app().await, "/users/1/edit").await;
 
@@ -287,15 +399,68 @@ async fn update_validation_rerenders_form_for_duplicate_email() {
 
 #[tokio::test]
 async fn login_redirects_into_chat_and_sets_a_session_cookie() {
-    let (status, _, location) = post_form(
-        test_app().await,
-        "/login",
-        "email=alice%40example.com&password=alice-password",
-    )
-    .await;
+    let app = test_app().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "email=alice%40example.com&password=alice-password".to_string(),
+        ))
+        .expect("build request");
+
+    let (status, _, location, set_cookie) = request(app.clone(), req).await;
 
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location.as_deref(), Some("/chat"));
+    assert!(set_cookie.is_some());
+
+    let cookie = cookie_value(set_cookie.as_deref().expect("set cookie"));
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri("/chat")
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .expect("build request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).expect("valid utf-8 html");
+    assert!(html.contains("Logout"));
+    assert!(html.contains("See profile: Alice"));
+    assert!(html.contains("General"));
+    assert!(html.contains("Create private room"));
+}
+
+#[tokio::test]
+async fn create_private_room_redirects_to_the_new_room() {
+    let app = test_app().await;
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "email=alice%40example.com&password=alice-password".to_string(),
+        ))
+        .expect("build request");
+
+    let (_, _, _, set_cookie) = request(app.clone(), login_req).await;
+    let cookie = cookie_value(set_cookie.as_deref().expect("set cookie"));
+
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, cookie)
+        .body(Body::from("name=Pair%20Room&participant_ids=2".to_string()))
+        .expect("build request");
+
+    let (status, _, location, _) = request(app, create_req).await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/chat/rooms/2"));
 }
 
 #[tokio::test]

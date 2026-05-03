@@ -3,7 +3,15 @@
 {% block title %}Edit User{% endblock %}
 
 {% block content %}
-    <h1>Edit User</h1>
-    <p class="muted">Editing the profile does not change the chat password.</p>
-    {% include "users/_form.html" %}
+    <section class="mx-auto max-w-2xl space-y-6">
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 sm:p-8">
+            <p class="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300/80">Edit account</p>
+            <h1 class="mt-3 text-4xl font-black tracking-tight text-white">Edit User</h1>
+            <p class="mt-4 text-base leading-7 text-slate-300">Editing the profile does not change the chat password.</p>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-lg shadow-slate-950/25 sm:p-8">
+            {% include "users/_form.html" %}
+        </div>
+    </section>
 {% endblock %}

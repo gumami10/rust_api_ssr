@@ -3,25 +3,41 @@
 {% block title %}Users List{% endblock %}
 
 {% block content %}
-    <div class="hero">
-        <h1>Users</h1>
-        <p class="muted">Create an account with a password, then log into the shared live chat.</p>
-        <div class="actions">
-            <a class="button" href="/users/new">Create account</a>
-            <a class="button" href="/login">Login to chat</a>
-            <a class="button" href="/chat">Open chat</a>
+    <section class="overflow-hidden rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+        <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div class="max-w-2xl space-y-4">
+                <p class="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300/80">Directory</p>
+                <h1 class="text-4xl font-black tracking-tight text-white sm:text-5xl">Users</h1>
+                <p class="text-base leading-7 text-slate-300">Create an account with a password, then log into the general chat or a private room.</p>
+            </div>
+            <div class="flex flex-wrap gap-3">
+                <a class="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" href="/users/new">Create account</a>
+                {% match viewer %}
+                {% when Some with (_) %}
+                    <a class="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10" href="/chat">Open chat</a>
+                {% when None %}
+                    <a class="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10" href="/login">Login to chat</a>
+                {% endmatch %}
+            </div>
         </div>
-    </div>
+    </section>
 
     {% if users.is_empty() %}
-        <p>No users found.</p>
+        <div class="mt-6 rounded-3xl border border-dashed border-white/15 bg-slate-900/50 p-8 text-center text-slate-300">
+            No users found.
+        </div>
     {% else %}
-        <ul>
+        <ul class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {% for user in users %}
-                <li>
-                    <a href="/users/{{ user.id }}"><strong>{{ user.name }}</strong></a>
-                    <br>
-                    <span class="email">{{ user.email }}</span>
+                <li class="group rounded-3xl border border-white/10 bg-slate-900/75 p-5 shadow-lg shadow-slate-950/25 transition hover:-translate-y-0.5 hover:border-cyan-400/30 hover:bg-slate-900/90">
+                    <div class="space-y-2">
+                        <a href="/users/{{ user.id }}"><strong>{{ user.name }}</strong></a>
+                        <div class="flex items-center justify-between gap-3">
+                            <span class="text-lg font-semibold text-white group-hover:text-cyan-200"></span>
+                            <span class="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">Profile</span>
+                        </div>
+                        <span class="block text-sm text-slate-400">{{ user.email }}</span>
+                    </div>
                 </li>
             {% endfor %}
         </ul>

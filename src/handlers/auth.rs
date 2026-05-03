@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::handlers::AppState;
+use crate::handlers::{AppState, RequestMetric};
 use crate::models::user::User;
 use askama::Template;
 use axum::{
@@ -15,6 +15,8 @@ const SESSION_COOKIE_NAME: &str = "chat_session";
 #[derive(Template)]
 #[template(path = "auth/login.html")]
 struct LoginTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
     email: String,
     email_error: Option<String>,
     password_error: Option<String>,
@@ -26,9 +28,32 @@ pub struct LoginForm {
     password: String,
 }
 
-pub async fn render_login() -> Result<Response, AppError> {
+pub async fn create_session_and_redirect(
+    state: &AppState,
+    user_id: i64,
+    location: &str,
+) -> Result<Response, AppError> {
+    let token = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO sessions (token, user_id) VALUES (?, ?)")
+        .bind(&token)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(redirect_with_cookie(location, &token))
+}
+
+pub async fn render_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let viewer = current_user(&state, &headers).await?;
+    let request_metrics = state.request_metrics.recent();
     render_template(
         LoginTemplate {
+            viewer,
+            request_metrics,
             email: String::new(),
             email_error: None,
             password_error: None,
@@ -42,7 +67,10 @@ pub async fn login(
     Form(form): Form<LoginForm>,
 ) -> Result<Response, AppError> {
     let email = form.email.trim().to_string();
+    let request_metrics = state.request_metrics.recent();
     let mut template = LoginTemplate {
+        viewer: None,
+        request_metrics,
         email: email.clone(),
         email_error: None,
         password_error: None,
@@ -81,15 +109,7 @@ pub async fn login(
         }
     };
 
-    let token = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO sessions (token, user_id) VALUES (?, ?)")
-        .bind(&token)
-        .bind(user.id)
-        .execute(&state.pool)
-        .await
-        .map_err(AppError::Database)?;
-
-    Ok(redirect_with_cookie("/chat", &token))
+    create_session_and_redirect(&state, user.id, "/chat").await
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, AppError> {

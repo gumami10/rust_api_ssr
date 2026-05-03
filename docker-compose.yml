@@ -1,0 +1,13 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      BIND_ADDRESS: 0.0.0.0:3000
+      DATABASE_URL: sqlite:///app/data.db
+      RUST_LOG: rust_api_ssr=info,axum=warn
+    volumes:
+      - ./data.db:/app/data.db

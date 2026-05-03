@@ -1,13 +1,18 @@
 use axum::{
-    extract::{MatchedPath, Request},
+    extract::{MatchedPath, Request, State},
     http::StatusCode,
     middleware::Next,
     response::Response,
 };
+use crate::handlers::AppState;
 use std::time::Instant;
 use tracing::info;
 
-pub async fn log_request_latency(request: Request, next: Next) -> Response {
+pub async fn log_request_latency(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
     let method = request.method().clone();
     let path = request
         .extensions()
@@ -18,11 +23,14 @@ pub async fn log_request_latency(request: Request, next: Next) -> Response {
 
     let response = next.run(request).await;
     let status = response.status();
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+
+    state.request_metrics.record(path.clone(), elapsed_ms);
     log_latency(
         method.as_str(),
         &path,
         status,
-        started_at.elapsed().as_secs_f64() * 1000.0,
+        elapsed_ms as f64,
     );
 
     response

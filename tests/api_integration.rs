@@ -5,7 +5,7 @@ use axum::{
 };
 use rust_api_ssr::{
     app::create_router,
-    handlers::AppState,
+    handlers::{AppState, RequestMetrics},
     models::user::{SqliteUserRepository, User},
 };
 use serde_json::{json, Value};
@@ -51,6 +51,7 @@ async fn test_app() -> Router {
         user_repo,
         pool,
         chat_tx,
+        request_metrics: RequestMetrics::default(),
     })
 }
 

@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::handlers::auth;
-use crate::handlers::AppState;
+use crate::handlers::{AppState, RequestMetric};
 use crate::models::user::{NewUser, UpdateUser, User};
 use crate::services::users::UserServiceError;
 use askama::Template;
@@ -15,24 +15,32 @@ use serde::Deserialize;
 #[derive(Template)]
 #[template(path = "users/index.html")]
 struct IndexTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
     users: Vec<User>,
 }
 
 #[derive(Template)]
 #[template(path = "users/show.html")]
 struct ShowTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
     user: User,
 }
 
 #[derive(Template)]
 #[template(path = "users/new.html")]
 struct NewTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
     form: UserFormView,
 }
 
 #[derive(Template)]
 #[template(path = "users/edit.html")]
 struct EditTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
     form: UserFormView,
 }
 
@@ -139,9 +147,14 @@ pub async fn render_index(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let _viewer = auth::current_user(&state, &headers).await?;
+    let viewer = auth::current_user(&state, &headers).await?;
     let users = state.user_service().list_users().await?;
-    let template = IndexTemplate { users };
+    let request_metrics = state.request_metrics.recent();
+    let template = IndexTemplate {
+        viewer,
+        request_metrics,
+        users,
+    };
     Ok(template)
 }
 
@@ -150,19 +163,34 @@ pub async fn render_user(
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let _viewer = auth::current_user(&state, &headers).await?;
+    let viewer = auth::current_user(&state, &headers).await?;
+    let request_metrics = state.request_metrics.recent();
     let user = state
         .user_service()
         .get_user(id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("User with id {} not found", id)))?;
 
-    render_template(ShowTemplate { user }, StatusCode::OK)
+    render_template(
+        ShowTemplate {
+            viewer,
+            request_metrics,
+            user,
+        },
+        StatusCode::OK,
+    )
 }
 
-pub async fn render_new_user() -> Result<Response, AppError> {
+pub async fn render_new_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let viewer = auth::current_user(&state, &headers).await?;
+    let request_metrics = state.request_metrics.recent();
     render_template(
         NewTemplate {
+            viewer,
+            request_metrics,
             form: UserFormView::new("/users", "Create user"),
         },
         StatusCode::OK,
@@ -171,12 +199,22 @@ pub async fn render_new_user() -> Result<Response, AppError> {
 
 pub async fn create_user(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Form(form): Form<UserForm>,
 ) -> Result<Response, AppError> {
+    let viewer = auth::current_user(&state, &headers).await?;
+    let request_metrics = state.request_metrics.recent();
     let mut form = match UserFormView::validate("/users", "Create user", form, true) {
         Ok(form) => form,
         Err(form) => {
-            return render_template(NewTemplate { form }, StatusCode::UNPROCESSABLE_ENTITY)
+            return render_template(
+                NewTemplate {
+                    viewer,
+                    request_metrics,
+                    form,
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )
         }
     };
 
@@ -192,7 +230,14 @@ pub async fn create_user(
         Ok(user) => user,
         Err(UserServiceError::DuplicateEmail) => {
             form.email_error = Some("Email already exists.".to_string());
-            return render_template(NewTemplate { form }, StatusCode::CONFLICT);
+            return render_template(
+                NewTemplate {
+                    viewer,
+                    request_metrics,
+                    form,
+                },
+                StatusCode::CONFLICT,
+            );
         }
         Err(UserServiceError::InvalidCredentials) | Err(UserServiceError::PasswordHash(_)) => {
             return Err(AppError::Internal);
@@ -200,13 +245,16 @@ pub async fn create_user(
         Err(UserServiceError::Database(err)) => return Err(AppError::Database(err)),
     };
 
-    Ok(Redirect::to(&format!("/users/{}", user.id)).into_response())
+    auth::create_session_and_redirect(&state, user.id, &format!("/users/{}", user.id)).await
 }
 
 pub async fn render_edit_user(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
+    let viewer = auth::current_user(&state, &headers).await?;
+    let request_metrics = state.request_metrics.recent();
     let user = state
         .user_service()
         .get_user(id)
@@ -215,6 +263,8 @@ pub async fn render_edit_user(
 
     render_template(
         EditTemplate {
+            viewer,
+            request_metrics,
             form: UserFormView::from_user(&user),
         },
         StatusCode::OK,
@@ -223,14 +273,24 @@ pub async fn render_edit_user(
 
 pub async fn update_user(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<UserForm>,
 ) -> Result<Response, AppError> {
+    let viewer = auth::current_user(&state, &headers).await?;
+    let request_metrics = state.request_metrics.recent();
     let mut form = match UserFormView::validate(format!("/users/{}", id), "Save user", form, false)
     {
         Ok(form) => form,
         Err(form) => {
-            return render_template(EditTemplate { form }, StatusCode::UNPROCESSABLE_ENTITY)
+            return render_template(
+                EditTemplate {
+                    viewer,
+                    request_metrics,
+                    form,
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )
         }
     };
 
@@ -249,7 +309,14 @@ pub async fn update_user(
         Ok(None) => return Err(AppError::NotFound(format!("User with id {} not found", id))),
         Err(UserServiceError::DuplicateEmail) => {
             form.email_error = Some("Email already exists.".to_string());
-            return render_template(EditTemplate { form }, StatusCode::CONFLICT);
+            return render_template(
+                EditTemplate {
+                    viewer,
+                    request_metrics,
+                    form,
+                },
+                StatusCode::CONFLICT,
+            );
         }
         Err(UserServiceError::InvalidCredentials) | Err(UserServiceError::PasswordHash(_)) => {
             return Err(AppError::Internal);
