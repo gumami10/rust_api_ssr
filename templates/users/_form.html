@@ -61,6 +61,12 @@
         <div class="flex flex-wrap gap-3 pt-2">
             <button class="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">{{ form.submit_label }}</button>
             <a class="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-cyan-400/10" href="/users">Cancel</a>
+            {% if form.show_password %}
+            <button id="fill-all-fields" class="inline-flex items-center justify-center gap-2 rounded-full border border-indigo-400/30 bg-indigo-400/10 px-5 py-3 text-sm font-medium text-indigo-200 transition hover:border-indigo-300/50 hover:bg-indigo-400/20" type="button">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                Fill all fields
+            </button>
+            {% endif %}
         </div>
     </div>
 </form>

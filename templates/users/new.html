@@ -29,6 +29,7 @@
             input.dispatchEvent(new Event("change", { bubbles: true }));
         };
 
+        // Individual field fill buttons
         document.querySelectorAll("[data-faker-fill]").forEach((button) => {
             button.addEventListener("click", () => {
                 const targetId = button.getAttribute("data-faker-target");
@@ -49,5 +50,19 @@
                 input.focus();
             });
         });
+
+        // Fill-all button: auto-generate every sign up field at once
+        const fillAllBtn = document.getElementById("fill-all-fields");
+        if (fillAllBtn) {
+            fillAllBtn.addEventListener("click", () => {
+                for (const [fieldId, generator] of Object.entries(generators)) {
+                    const input = document.getElementById(fieldId);
+                    if (input) {
+                        input.value = generator();
+                        dispatchValueChange(input);
+                    }
+                }
+            });
+        }
     </script>
 {% endblock %}

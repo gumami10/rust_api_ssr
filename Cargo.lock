@@ -1373,6 +1373,7 @@ dependencies = [
  "askama_axum",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "futures-util",
  "password-hash",
  "rand_core",

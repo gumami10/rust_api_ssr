@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
-async fn test_app() -> Router {
+async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -112,13 +112,32 @@ async fn test_app() -> Router {
             room_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             body TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            kind TEXT NOT NULL DEFAULT 'user',
+            file_name TEXT,
+            file_data BLOB,
+            file_content_type TEXT
         )
         "#,
     )
     .execute(&pool)
     .await
     .expect("create chat_messages table");
+
+    sqlx::query(
+        r#"
+        CREATE TABLE chat_room_read_positions (
+            room_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            last_read_message_id INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (room_id, user_id)
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create chat_room_read_positions table");
 
     let alice_hash = hash_password("alice-password").expect("hash password");
     let bob_hash = hash_password("bob-password").expect("hash password");
@@ -141,12 +160,17 @@ async fn test_app() -> Router {
 
     let user_repo = Arc::new(SqliteUserRepository::new(pool.clone()));
     let (chat_tx, _) = broadcast::channel(100);
-    create_router(AppState {
+    let app = create_router(AppState {
         user_repo,
-        pool,
+        pool: pool.clone(),
         chat_tx,
         request_metrics: RequestMetrics::default(),
-    })
+    });
+    (app, pool)
+}
+
+async fn test_app() -> Router {
+    test_app_with_pool().await.0
 }
 
 async fn request(
@@ -482,4 +506,510 @@ async fn delete_user_redirects_back_to_index() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let html = String::from_utf8(body).expect("valid utf-8 html");
     assert!(html.contains(r#""error":"User with id 1 not found""#));
+}
+
+#[tokio::test]
+async fn login_form_validation_errors() {
+    let app = test_app().await;
+
+    // Empty email
+    let (status, body, _) = post_form(app.clone(), "/login", "email=&password=pass").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8(body).unwrap().contains("Email is required."));
+
+    // Invalid email
+    let (status, body, _) = post_form(app.clone(), "/login", "email=invalid&password=pass").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8(body).unwrap().contains("Email must contain @."));
+
+    // Empty password
+    let (status, body, _) =
+        post_form(app.clone(), "/login", "email=alice@example.com&password=").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8(body).unwrap().contains("Password is required."));
+
+    // Incorrect credentials
+    let (status, body, _) = post_form(
+        app.clone(),
+        "/login",
+        "email=alice@example.com&password=wrong",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains("Email or password is incorrect."));
+}
+
+#[tokio::test]
+async fn logout_invalidates_session() {
+    let app = test_app().await;
+
+    // Login
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_req).await;
+    let cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Verify chat access
+    let (status, _, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .uri("/chat")
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Logout
+    let (status, _, location, set_cookie) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/logout")
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/users"));
+    assert!(set_cookie.unwrap().contains("Max-Age=0"));
+
+    // Verify chat access is gone
+    let (status, _, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .uri("/chat")
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER); // Redirect to login
+}
+
+#[tokio::test]
+async fn create_room_validation_errors() {
+    let app = test_app().await;
+
+    // Login
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_req).await;
+    let cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Create room with no other participants
+    let (status, body, location, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/chat/rooms")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, cookie)
+            .body(Body::from("name=Empty&participant_ids="))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK); // Renders the page with error
+    assert_eq!(location, None);
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains("Add at least one other participant"));
+}
+
+#[tokio::test]
+async fn invite_and_accept_flow() {
+    let app = test_app().await;
+
+    // Alice login
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Alice creates a private room with Bob (Bob is ID 2)
+    let create_room = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Secret&participant_ids=2"))
+        .unwrap();
+    let (_, _, location, _) = request(app.clone(), create_room).await;
+    let room_path = location.unwrap();
+
+    // Create a new user Carol to invite.
+    post_form(
+        app.clone(),
+        "/users",
+        "name=Carol&email=carol%40example.com&password=carol-password",
+    )
+    .await;
+    // Carol should be ID 3.
+
+    // Alice invites Carol to the room
+    let invite_req = Request::builder()
+        .method("POST")
+        .uri(format!("{}/invites", room_path))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("user_id=3"))
+        .unwrap();
+    let (status, _, location, _) = request(app.clone(), invite_req).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some(room_path.as_str()));
+
+    // Carol login
+    let login_carol = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=carol%40example.com&password=carol-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_carol).await;
+    let carol_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Carol sees the invite on her chat page
+    let (status, body, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .uri("/chat")
+            .header(header::COOKIE, &carol_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    assert!(html.contains("Secret"));
+    assert!(html.contains("Invited by Alice"));
+
+    // Carol accepts the invite (invite ID should be 1 as it's the first one in the DB)
+    let accept_req = Request::builder()
+        .method("POST")
+        .uri("/chat/invites/1/accept")
+        .header(header::COOKIE, &carol_cookie)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, location, _) = request(app.clone(), accept_req).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some(room_path.as_str()));
+
+    // Carol can now see the room content
+    let (status, body, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .uri(&room_path)
+            .header(header::COOKIE, &carol_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(body).unwrap().contains("Secret"));
+}
+
+#[tokio::test]
+async fn invite_validation_errors() {
+    let app = test_app().await;
+
+    // Alice login
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Create room
+    let (_, _, location, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/chat/rooms")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from("name=Secret&participant_ids=2"))
+            .unwrap(),
+    )
+    .await;
+    let room_path = location.unwrap();
+
+    // Invite self
+    let (status, body, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(format!("{}/invites", room_path))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from("user_id=1"))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains("You cannot invite yourself."));
+
+    // Invite Bob (already member)
+    let (status, body, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(format!("{}/invites", room_path))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from("user_id=2"))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains("That user is already part of this chat."));
+
+    // Invite to General (ID 1 is General room)
+    let (status, body, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/chat/rooms/1/invites")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from("user_id=2"))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains("The general chat cannot be restricted by invitation."));
+}
+
+#[tokio::test]
+async fn serve_file_returns_not_found_for_missing_file() {
+    let app = test_app().await;
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    let (status, _, _, _) = request(
+        app,
+        Request::builder()
+            .uri("/chat/files/999")
+            .header(header::COOKIE, alice_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn password_length_validation_on_signup() {
+    let app = test_app().await;
+    let (status, body, _) = post_form(
+        app,
+        "/users",
+        "name=Dave&email=dave%40example.com&password=short",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains("Password must be at least 8 characters."));
+}
+
+#[tokio::test]
+async fn accept_invite_validation_errors() {
+    let app = test_app().await;
+
+    // Alice login
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Alice creates a private room with Bob (Bob is ID 2)
+    let (_, _, location, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/chat/rooms")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from("name=Secret&participant_ids=2"))
+            .unwrap(),
+    )
+    .await;
+    let room_path = location.unwrap();
+
+    // Alice invites Carol (Carol will be 3)
+    post_form(
+        app.clone(),
+        "/users",
+        "name=Carol&email=carol%40example.com&password=carol-password",
+    )
+    .await;
+    request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(format!("{}/invites", room_path))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from("user_id=3"))
+            .unwrap(),
+    )
+    .await;
+
+    // Bob tries to accept Carol's invite (invite ID 1)
+    let login_bob = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=bob%40example.com&password=bob-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_bob).await;
+    let bob_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    let (status, _, _, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/chat/invites/1/accept")
+            .header(header::COOKIE, &bob_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND); // Mismatched user
+}
+
+#[tokio::test]
+async fn serve_file_success() {
+    let (app, pool) = test_app_with_pool().await;
+
+    // Insert a message with a file manually
+    sqlx::query(
+        "INSERT INTO chat_messages (room_id, user_id, body, kind, file_name, file_data, file_content_type)
+         VALUES (1, 1, 'Here is a file', 'user', 'test.txt', ?, 'text/plain')"
+    )
+    .bind("Hello world".as_bytes())
+    .execute(&pool)
+    .await
+    .expect("insert test file message");
+
+    // Alice login
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Request the file (message ID 1)
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri("/chat/files/1")
+            .header(header::COOKIE, alice_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "Hello world".as_bytes());
+}
+
+#[tokio::test]
+async fn cannot_access_private_room_without_invite() {
+    let app = test_app().await;
+
+    // Alice login
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Alice creates a private room with Bob
+    let (_, _, location, _) = request(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/chat/rooms")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from("name=Secret&participant_ids=2"))
+            .unwrap(),
+    )
+    .await;
+    let room_path = location.unwrap();
+
+    // Carol login (Carol is not in the room)
+    post_form(
+        app.clone(),
+        "/users",
+        "name=Carol&email=carol%40example.com&password=carol-password",
+    )
+    .await;
+    let login_carol = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=carol%40example.com&password=carol-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_carol).await;
+    let carol_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Carol tries to access Alice's secret room
+    let (status, _, location, _) = request(
+        app.clone(),
+        Request::builder()
+            .uri(&room_path)
+            .header(header::COOKIE, &carol_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/chat"));
 }

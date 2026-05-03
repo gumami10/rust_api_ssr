@@ -11,21 +11,44 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::broadcast;
 
 pub const GENERAL_ROOM_ID: i64 = 1;
 
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ChatEvent {
     pub id: i64,
     pub room_id: i64,
     pub user_name: String,
     pub body: String,
     pub created_at: String,
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    pub file_name: Option<String>,
+    pub file_content_type: Option<String>,
+}
+
+fn default_kind() -> String {
+    "user".to_string()
+}
+
+/// Envelope sent over the broadcast channel and serialized to WS clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum BroadcastEvent {
+    #[serde(rename = "message")]
+    Message(ChatEvent),
+    #[serde(rename = "typing")]
+    Typing {
+        room_id: i64,
+        user_name: String,
+        is_typing: bool,
+    },
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -44,6 +67,7 @@ struct ChatRoomView {
     participant_count: i64,
     path: String,
     is_active: bool,
+    unread_count: i64,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -209,6 +233,14 @@ pub async fn create_chat_room(
 
     tx.commit().await.map_err(AppError::Database)?;
 
+    // Emit notification
+    if let Ok(event) = persist_notification(
+        &state, &user, room_id,
+        &format!("{} created this room", user.name),
+    ).await {
+        let _ = state.chat_tx.send(BroadcastEvent::Message(event));
+    }
+
     Ok(Redirect::to(&room_path(room_id, false)).into_response())
 }
 
@@ -357,6 +389,14 @@ pub async fn accept_invite(
 
     tx.commit().await.map_err(AppError::Database)?;
 
+    // Emit notification
+    if let Ok(event) = persist_notification(
+        &state, &user, invite.room_id,
+        &format!("{} joined the room", user.name),
+    ).await {
+        let _ = state.chat_tx.send(BroadcastEvent::Message(event));
+    }
+
     Ok(Redirect::to(&room_path(invite.room_id, false)).into_response())
 }
 
@@ -390,13 +430,43 @@ async fn handle_socket(socket: WebSocket, state: AppState, user: User, room_id: 
                 match incoming {
                     Some(Ok(Message::Text(payload))) => {
                         if let Ok(input) = serde_json::from_str::<ChatInput>(payload.as_str()) {
-                            let body = input.body.trim().to_string();
+                            // Handle typing indicator
+                            if let Some(is_typing) = input.typing {
+                                let _ = state.chat_tx.send(BroadcastEvent::Typing {
+                                    room_id,
+                                    user_name: user.name.clone(),
+                                    is_typing,
+                                });
+                                continue;
+                            }
+
+                            let body = input.body.as_deref().unwrap_or("").trim().to_string();
+
+                            // Handle file attachment
+                            if let (Some(ref file_b64), Some(ref file_name)) = (&input.file_data, &input.file_name) {
+                                let content_type = input.file_content_type.clone().unwrap_or_else(|| "application/octet-stream".to_string());
+                                if let Ok(file_bytes) = base64::engine::general_purpose::STANDARD.decode(file_b64) {
+                                    let display_body = if body.is_empty() {
+                                        format!("shared a file: {}", file_name)
+                                    } else {
+                                        body.clone()
+                                    };
+                                    if let Ok(event) = persist_message_with_file(
+                                        &state, &user, room_id, &display_body,
+                                        file_name, &file_bytes, &content_type,
+                                    ).await {
+                                        let _ = state.chat_tx.send(BroadcastEvent::Message(event));
+                                    }
+                                }
+                                continue;
+                            }
+
                             if body.is_empty() {
                                 continue;
                             }
 
                             if let Ok(event) = persist_message(&state, &user, room_id, &body).await {
-                                let _ = state.chat_tx.send(event);
+                                let _ = state.chat_tx.send(BroadcastEvent::Message(event));
                             }
                         }
                     }
@@ -406,8 +476,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, user: User, room_id: 
                 }
             }
             broadcasted = broadcast_rx.recv() => {
+                let should_forward = match &broadcasted {
+                    Ok(BroadcastEvent::Message(event)) => event.room_id == room_id,
+                    Ok(BroadcastEvent::Typing { room_id: rid, .. }) => *rid == room_id,
+                    Err(_) => false,
+                };
                 match broadcasted {
-                    Ok(event) if event.room_id == room_id => {
+                    Ok(event) if should_forward => {
                         let payload = serde_json::to_string(&event).unwrap_or_default();
                         if sender.send(Message::Text(payload.into())).await.is_err() {
                             break;
@@ -432,6 +507,9 @@ async fn render_chat_room_page(
         return Ok(Redirect::to("/chat").into_response());
     };
 
+    // Mark current room as read
+    let _ = update_read_position(state, viewer.id, room.id).await;
+
     let request_metrics = state.request_metrics.recent();
     let messages = recent_messages(state, room.id).await?;
     let participants = room_participants(state, room.id).await?;
@@ -443,7 +521,8 @@ async fn render_chat_room_page(
         .filter(|candidate| candidate.id != viewer.id)
         .collect::<Vec<_>>();
     let pending_invites = pending_invites_for_user(state, viewer.id).await?;
-    let rooms = accessible_rooms(state, viewer.id, room.id).await?;
+    let unread_counts = get_unread_counts(state, viewer.id).await?;
+    let rooms = accessible_rooms(state, viewer.id, room.id, &unread_counts).await?;
     let available_invitees = available_invitees(&all_users, viewer.id, &participants);
 
     render_template(
@@ -502,6 +581,7 @@ async fn accessible_room(
         name: row.name,
         is_general: row.is_general,
         participant_count: row.participant_count,
+        unread_count: 0,
     }))
 }
 
@@ -509,6 +589,7 @@ async fn accessible_rooms(
     state: &AppState,
     user_id: i64,
     active_room_id: i64,
+    unread_counts: &HashMap<i64, i64>,
 ) -> Result<Vec<ChatRoomView>, AppError> {
     let rows = sqlx::query_as::<_, ChatRoomRow>(
         r#"
@@ -535,13 +616,17 @@ async fn accessible_rooms(
 
     Ok(rows
         .into_iter()
-        .map(|row| ChatRoomView {
-            path: room_path(row.id, row.is_general),
-            is_active: row.id == active_room_id,
-            id: row.id,
-            name: row.name,
-            is_general: row.is_general,
-            participant_count: row.participant_count,
+        .map(|row| {
+            let unread = unread_counts.get(&row.id).copied().unwrap_or(0);
+            ChatRoomView {
+                path: room_path(row.id, row.is_general),
+                is_active: row.id == active_room_id,
+                id: row.id,
+                name: row.name,
+                is_general: row.is_general,
+                participant_count: row.participant_count,
+                unread_count: if row.id == active_room_id { 0 } else { unread },
+            }
         })
         .collect())
 }
@@ -613,7 +698,10 @@ async fn recent_messages(
             chat_messages.room_id,
             users.name AS user_name,
             chat_messages.body,
-            chat_messages.created_at
+            chat_messages.created_at,
+            chat_messages.kind,
+            chat_messages.file_name,
+            chat_messages.file_content_type
         FROM chat_messages
         INNER JOIN users ON users.id = chat_messages.user_id
         WHERE chat_messages.room_id = ?
@@ -635,7 +723,7 @@ async fn persist_message(
     room_id: i64,
     body: &str,
 ) -> Result<ChatEvent, AppError> {
-    let result = sqlx::query("INSERT INTO chat_messages (room_id, user_id, body) VALUES (?, ?, ?)")
+    let result = sqlx::query("INSERT INTO chat_messages (room_id, user_id, body, kind) VALUES (?, ?, ?, 'user')")
         .bind(room_id)
         .bind(user.id)
         .bind(body)
@@ -656,7 +744,136 @@ async fn persist_message(
         user_name: user.name.clone(),
         body: body.to_string(),
         created_at: created_at.0,
+        kind: "user".to_string(),
+        file_name: None,
+        file_content_type: None,
     })
+}
+
+async fn persist_message_with_file(
+    state: &AppState,
+    user: &User,
+    room_id: i64,
+    body: &str,
+    file_name: &str,
+    file_data: &[u8],
+    content_type: &str,
+) -> Result<ChatEvent, AppError> {
+    let result = sqlx::query(
+        "INSERT INTO chat_messages (room_id, user_id, body, kind, file_name, file_data, file_content_type) VALUES (?, ?, ?, 'user', ?, ?, ?)",
+    )
+    .bind(room_id)
+    .bind(user.id)
+    .bind(body)
+    .bind(file_name)
+    .bind(file_data)
+    .bind(content_type)
+    .execute(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    let id = result.last_insert_rowid();
+    let created_at: (String,) = sqlx::query_as("SELECT created_at FROM chat_messages WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(ChatEvent {
+        id,
+        room_id,
+        user_name: user.name.clone(),
+        body: body.to_string(),
+        created_at: created_at.0,
+        kind: "user".to_string(),
+        file_name: Some(file_name.to_string()),
+        file_content_type: Some(content_type.to_string()),
+    })
+}
+
+async fn persist_notification(
+    state: &AppState,
+    user: &User,
+    room_id: i64,
+    body: &str,
+) -> Result<ChatEvent, AppError> {
+    let result = sqlx::query(
+        "INSERT INTO chat_messages (room_id, user_id, body, kind) VALUES (?, ?, ?, 'notification')",
+    )
+    .bind(room_id)
+    .bind(user.id)
+    .bind(body)
+    .execute(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    let id = result.last_insert_rowid();
+    let created_at: (String,) = sqlx::query_as("SELECT created_at FROM chat_messages WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(ChatEvent {
+        id,
+        room_id,
+        user_name: user.name.clone(),
+        body: body.to_string(),
+        created_at: created_at.0,
+        kind: "notification".to_string(),
+        file_name: None,
+        file_content_type: None,
+    })
+}
+
+async fn update_read_position(
+    state: &AppState,
+    user_id: i64,
+    room_id: i64,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO chat_room_read_positions (room_id, user_id, last_read_message_id, updated_at)
+        VALUES (?, ?, COALESCE((SELECT MAX(id) FROM chat_messages WHERE room_id = ?), 0), CURRENT_TIMESTAMP)
+        ON CONFLICT(room_id, user_id) DO UPDATE SET
+            last_read_message_id = COALESCE((SELECT MAX(id) FROM chat_messages WHERE room_id = excluded.room_id), 0),
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(room_id)
+    .bind(user_id)
+    .bind(room_id)
+    .execute(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+    Ok(())
+}
+
+async fn get_unread_counts(
+    state: &AppState,
+    user_id: i64,
+) -> Result<HashMap<i64, i64>, AppError> {
+    let rows = sqlx::query_as::<_, (i64, i64)>(
+        r#"
+        SELECT rooms.id,
+               (SELECT COUNT(*) FROM chat_messages
+                WHERE chat_messages.room_id = rooms.id
+                  AND chat_messages.id > COALESCE(
+                      (SELECT last_read_message_id FROM chat_room_read_positions
+                       WHERE room_id = rooms.id AND user_id = ?), 0)
+               ) AS unread
+        FROM chat_rooms rooms
+        WHERE rooms.kind = 'general'
+           OR EXISTS (SELECT 1 FROM chat_room_members WHERE room_id = rooms.id AND user_id = ?)
+        "#,
+    )
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    Ok(rows.into_iter().collect())
 }
 
 async fn users_by_ids(state: &AppState, ids: &[i64]) -> Result<Vec<User>, AppError> {
@@ -700,7 +917,43 @@ fn room_path(room_id: i64, is_general: bool) -> String {
 
 #[derive(Debug, Deserialize)]
 struct ChatInput {
-    body: String,
+    body: Option<String>,
+    typing: Option<bool>,
+    file_data: Option<String>,
+    file_name: Option<String>,
+    file_content_type: Option<String>,
+}
+
+pub async fn serve_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(message_id): Path<i64>,
+) -> Result<Response, AppError> {
+    let Some(_user) = auth::current_user(&state, &headers).await? else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+
+    let row = sqlx::query_as::<_, (Vec<u8>, String, String)>(
+        "SELECT file_data, file_name, file_content_type FROM chat_messages WHERE id = ? AND file_data IS NOT NULL",
+    )
+    .bind(message_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    let Some((data, name, content_type)) = row else {
+        return Err(AppError::NotFound(format!("File for message {} not found", message_id)));
+    };
+
+    let disposition = format!("inline; filename=\"{}\"", name.replace('"', "\\\""));
+    Ok((
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, content_type),
+            (axum::http::header::CONTENT_DISPOSITION, disposition),
+        ],
+        data,
+    ).into_response())
 }
 
 fn render_template<T: Template>(template: T, status: StatusCode) -> Result<Response, AppError> {

@@ -52,7 +52,7 @@ impl RequestMetrics {
 pub struct AppState {
     pub user_repo: Arc<dyn UserRepository + Send + Sync>,
     pub pool: SqlitePool,
-    pub chat_tx: broadcast::Sender<crate::handlers::chat::ChatEvent>,
+    pub chat_tx: broadcast::Sender<crate::handlers::chat::BroadcastEvent>,
     pub request_metrics: RequestMetrics,
 }
 

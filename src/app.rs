@@ -33,6 +33,10 @@ pub fn create_router(state: AppState) -> Router {
             post(crate::handlers::chat::accept_invite),
         )
         .route("/chat/ws", get(crate::handlers::chat::chat_ws))
+        .route(
+            "/chat/files/:id",
+            get(crate::handlers::chat::serve_file),
+        )
         .route("/api/users", get(api::list_users))
         .route("/api/users/:id", get(api::get_user).delete(api::delete_user))
         .layer(middleware::from_fn_with_state(state.clone(), log_request_latency))

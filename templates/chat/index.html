@@ -42,15 +42,37 @@
 
                 <ul id="chat-messages" class="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
                     {% for message in messages %}
-                        <li class="rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20" data-message-id="{{ message.id }}">
-                            <div class="flex items-center justify-between gap-3">
-                                <strong class="text-sm font-semibold text-cyan-200">{{ message.user_name }}</strong>
-                                <span class="text-xs text-slate-500">{{ message.created_at }}</span>
-                            </div>
-                            <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">{{ message.body }}</p>
-                        </li>
+                        {% if message.kind == "notification" %}
+                            <li class="flex items-center gap-3 px-4 py-2" data-message-id="{{ message.id }}">
+                                <span class="h-px flex-1 bg-white/10"></span>
+                                <span class="text-xs font-medium text-slate-400 italic">{{ message.body }}</span>
+                                <span class="h-px flex-1 bg-white/10"></span>
+                            </li>
+                        {% else %}
+                            <li class="rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20" data-message-id="{{ message.id }}">
+                                <div class="flex items-center justify-between gap-3">
+                                    <strong class="text-sm font-semibold text-cyan-200">{{ message.user_name }}</strong>
+                                    <span class="text-xs text-slate-500">{{ message.created_at }}</span>
+                                </div>
+                                <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">{{ message.body }}</p>
+                                {% match message.file_name %}
+                                {% when Some with (fname) %}
+                                    <a href="/chat/files/{{ message.id }}" target="_blank" class="mt-2 inline-flex items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/20">
+                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+                                        {{ fname }}
+                                    </a>
+                                {% when None %}
+                                {% endmatch %}
+                            </li>
+                        {% endif %}
                     {% endfor %}
                 </ul>
+
+                <div id="typing-indicator" class="mt-3 hidden px-2">
+                    <p class="text-xs text-slate-400 italic">
+                        <span id="typing-names"></span> <span class="animate-pulse">typing…</span>
+                    </p>
+                </div>
             </section>
 
             <aside class="space-y-4 rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-lg shadow-slate-950/25">
@@ -68,7 +90,12 @@
                                     href="{{ room_item.path }}"
                                 >
                                     <span class="min-w-0 truncate text-sm font-medium">{{ room_item.name }}</span>
-                                    <span class="rounded-full border border-white/10 bg-slate-950/60 px-2 py-0.5 text-xs text-slate-400">{{ room_item.participant_count }}</span>
+                                    <span class="flex items-center gap-1.5">
+                                        {% if room_item.unread_count > 0 %}
+                                            <span class="flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-cyan-400 px-1.5 text-[10px] font-bold text-slate-950">{{ room_item.unread_count }}</span>
+                                        {% endif %}
+                                        <span class="rounded-full border border-white/10 bg-slate-950/60 px-2 py-0.5 text-xs text-slate-400">{{ room_item.participant_count }}</span>
+                                    </span>
                                 </a>
                             </li>
                         {% endfor %}
@@ -80,6 +107,10 @@
                         <div class="space-y-2">
                             <label class="text-sm font-semibold text-slate-200" for="chat-body">Send a message</label>
                             <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="chat-body" name="body" autocomplete="off" placeholder="Type a message">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-sm font-semibold text-slate-200" for="file-input">Attach file</label>
+                            <input class="w-full text-sm text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-cyan-400/10 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-cyan-200 hover:file:bg-cyan-400/20" id="file-input" type="file">
                         </div>
                         <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">Send</button>
                     </form>
@@ -207,26 +238,11 @@
             const socket = new WebSocket(`${scheme}://${window.location.host}/chat/ws?room_id={{ room.id }}`);
             const form = document.getElementById("chat-form");
             const bodyInput = document.getElementById("chat-body");
+            const fileInput = document.getElementById("file-input");
             const createRoomForm = document.querySelector('form[action="/chat/rooms"]');
             const roomParticipantIds = document.getElementById("room-participant-ids");
-
-            const appendMessage = (message) => {
-                if (!message || !message.body) {
-                    return;
-                }
-
-                const item = document.createElement("li");
-                item.className = "rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20";
-                item.innerHTML = `
-                    <div class="flex items-center justify-between gap-3">
-                        <strong class="text-sm font-semibold text-cyan-200">${escapeHtml(message.user_name || "Guest")}</strong>
-                        <span class="text-xs text-slate-500">${escapeHtml(message.created_at || "")}</span>
-                    </div>
-                    <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">${escapeHtml(message.body)}</p>
-                `;
-                messages.appendChild(item);
-                messages.scrollTop = messages.scrollHeight;
-            };
+            const typingIndicator = document.getElementById("typing-indicator");
+            const typingNames = document.getElementById("typing-names");
 
             const escapeHtml = (value) => String(value)
                 .replaceAll("&", "&amp;")
@@ -235,18 +251,135 @@
                 .replaceAll('"', "&quot;")
                 .replaceAll("'", "&#39;");
 
+            const appendMessage = (message) => {
+                if (!message || !message.body) {
+                    return;
+                }
+
+                const item = document.createElement("li");
+
+                if (message.kind === "notification") {
+                    item.className = "flex items-center gap-3 px-4 py-2";
+                    item.innerHTML = `
+                        <span class="h-px flex-1 bg-white/10"></span>
+                        <span class="text-xs font-medium text-slate-400 italic">${escapeHtml(message.body)}</span>
+                        <span class="h-px flex-1 bg-white/10"></span>
+                    `;
+                } else {
+                    item.className = "rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20";
+                    let fileLink = "";
+                    if (message.file_name) {
+                        fileLink = `<a href="/chat/files/${message.id}" target="_blank" class="mt-2 inline-flex items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/20">
+                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+                            ${escapeHtml(message.file_name)}
+                        </a>`;
+                    }
+                    item.innerHTML = `
+                        <div class="flex items-center justify-between gap-3">
+                            <strong class="text-sm font-semibold text-cyan-200">${escapeHtml(message.user_name || "Guest")}</strong>
+                            <span class="text-xs text-slate-500">${escapeHtml(message.created_at || "")}</span>
+                        </div>
+                        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">${escapeHtml(message.body)}</p>
+                        ${fileLink}
+                    `;
+                }
+
+                messages.appendChild(item);
+                messages.scrollTop = messages.scrollHeight;
+            };
+
+            // Typing indicator state
+            const typingUsers = new Set();
+            let typingTimeout = null;
+
+            const updateTypingDisplay = () => {
+                if (typingUsers.size === 0) {
+                    typingIndicator.classList.add("hidden");
+                } else {
+                    typingIndicator.classList.remove("hidden");
+                    const names = Array.from(typingUsers);
+                    if (names.length === 1) {
+                        typingNames.textContent = names[0] + " is";
+                    } else if (names.length === 2) {
+                        typingNames.textContent = names.join(" and ") + " are";
+                    } else {
+                        typingNames.textContent = names.slice(0, -1).join(", ") + " and " + names[names.length - 1] + " are";
+                    }
+                }
+            };
+
             socket.addEventListener("message", (event) => {
                 try {
-                    appendMessage(JSON.parse(event.data));
+                    const data = JSON.parse(event.data);
+                    if (data.type === "typing") {
+                        if (data.is_typing) {
+                            typingUsers.add(data.user_name);
+                        } else {
+                            typingUsers.delete(data.user_name);
+                        }
+                        updateTypingDisplay();
+                    } else if (data.type === "message") {
+                        appendMessage(data);
+                        // Clear typing for this user when they send a message
+                        typingUsers.delete(data.user_name);
+                        updateTypingDisplay();
+                    }
                 } catch (_) {
                     // Ignore malformed frames.
                 }
             });
 
+            // Send typing indicators
+            let isTyping = false;
+            let typingTimer = null;
+
+            if (bodyInput) {
+                bodyInput.addEventListener("input", () => {
+                    if (!isTyping && socket.readyState === WebSocket.OPEN) {
+                        isTyping = true;
+                        socket.send(JSON.stringify({ typing: true }));
+                    }
+                    clearTimeout(typingTimer);
+                    typingTimer = setTimeout(() => {
+                        if (isTyping && socket.readyState === WebSocket.OPEN) {
+                            isTyping = false;
+                            socket.send(JSON.stringify({ typing: false }));
+                        }
+                    }, 2000);
+                });
+            }
+
             if (form && bodyInput) {
                 form.addEventListener("submit", (event) => {
                     event.preventDefault();
                     const body = bodyInput.value.trim();
+                    const file = fileInput ? fileInput.files[0] : null;
+
+                    // Stop typing indicator
+                    if (isTyping && socket.readyState === WebSocket.OPEN) {
+                        isTyping = false;
+                        socket.send(JSON.stringify({ typing: false }));
+                    }
+                    clearTimeout(typingTimer);
+
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const b64 = reader.result.split(",")[1];
+                            socket.send(JSON.stringify({
+                                body: body || null,
+                                file_data: b64,
+                                file_name: file.name,
+                                file_content_type: file.type || "application/octet-stream",
+                            }));
+                            bodyInput.value = "";
+                            fileInput.value = "";
+                            bodyInput.focus();
+                        };
+                        reader.readAsDataURL(file);
+                        return;
+                    }
+
                     if (!body || socket.readyState !== WebSocket.OPEN) {
                         return;
                     }
@@ -264,6 +397,11 @@
                     ).map((checkbox) => checkbox.value);
                     roomParticipantIds.value = selectedIds.join(",");
                 });
+            }
+
+            // Scroll to bottom on load
+            if (messages) {
+                messages.scrollTop = messages.scrollHeight;
             }
         })();
     </script>
