@@ -1,3 +1,4 @@
+use crate::cache::AppCache;
 use crate::models::user::UserRepository;
 use crate::services::users::UserService;
 use sqlx::SqlitePool;
@@ -15,7 +16,7 @@ pub mod views;
 #[derive(Clone, Debug)]
 pub struct RequestMetric {
     pub path: String,
-    pub elapsed_ms: u64,
+    pub elapsed_ms: f64,
 }
 
 #[derive(Clone, Default)]
@@ -24,9 +25,9 @@ pub struct RequestMetrics {
 }
 
 impl RequestMetrics {
-    const MAX_ENTRIES: usize = 8;
+    const MAX_ENTRIES: usize = 200;
 
-    pub fn record(&self, path: impl Into<String>, elapsed_ms: u64) {
+    pub fn record(&self, path: impl Into<String>, elapsed_ms: f64) {
         let mut entries = self.inner.lock().expect("request metrics lock");
         entries.push_front(RequestMetric {
             path: path.into(),
@@ -39,6 +40,16 @@ impl RequestMetrics {
     }
 
     pub fn recent(&self) -> Vec<RequestMetric> {
+        self.inner
+            .lock()
+            .expect("request metrics lock")
+            .iter()
+            .take(8)
+            .cloned()
+            .collect()
+    }
+
+    pub fn all(&self) -> Vec<RequestMetric> {
         self.inner
             .lock()
             .expect("request metrics lock")
@@ -104,6 +115,7 @@ pub struct AppState {
     pub request_metrics: RequestMetrics,
     pub cookie_secure: bool,
     pub login_rate_limiter: LoginRateLimiter,
+    pub cache: AppCache,
 }
 
 impl AppState {

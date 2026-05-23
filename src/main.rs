@@ -31,7 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ensure_schema(&pool).await?;
 
-    let user_repo = Arc::new(SqliteUserRepository::new(pool.clone()));
+    let cache = rust_api_ssr::cache::AppCache::new();
+    let user_repo = Arc::new(rust_api_ssr::cache::CachedUserRepository::new(
+        Arc::new(SqliteUserRepository::new(pool.clone())),
+        cache.clone(),
+    ));
     let (chat_tx, _) = broadcast::channel(100);
     let state = AppState {
         user_repo,
@@ -40,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         request_metrics: RequestMetrics::default(),
         cookie_secure: config.cookie_secure,
         login_rate_limiter: rust_api_ssr::handlers::LoginRateLimiter::new(5, 900),
+        cache,
     };
 
     let app = create_router(state);

@@ -52,29 +52,29 @@ pub enum BroadcastEvent {
 }
 
 #[derive(Debug, Clone, FromRow)]
-struct ChatRoomRow {
-    id: i64,
-    name: String,
-    is_general: bool,
-    participant_count: i64,
+pub struct ChatRoomRow {
+    pub id: i64,
+    pub name: String,
+    pub is_general: bool,
+    pub participant_count: i64,
 }
 
 #[derive(Debug, Clone)]
-struct ChatRoomView {
-    id: i64,
-    name: String,
-    is_general: bool,
-    participant_count: i64,
-    path: String,
-    is_active: bool,
-    unread_count: i64,
+pub struct ChatRoomView {
+    pub id: i64,
+    pub name: String,
+    pub is_general: bool,
+    pub participant_count: i64,
+    pub path: String,
+    pub is_active: bool,
+    pub unread_count: i64,
 }
 
 #[derive(Debug, Clone, FromRow)]
-struct ChatParticipant {
-    id: i64,
-    name: String,
-    email: String,
+pub struct ChatParticipant {
+    pub id: i64,
+    pub name: String,
+    pub email: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -87,11 +87,11 @@ struct PendingInviteRow {
 }
 
 #[derive(Debug, Clone)]
-struct PendingInviteView {
-    room_name: String,
-    invited_by_name: String,
-    created_at: String,
-    accept_path: String,
+pub struct PendingInviteView {
+    pub room_name: String,
+    pub invited_by_name: String,
+    pub created_at: String,
+    pub accept_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,16 +222,31 @@ pub async fn create_chat_room(
         .await
         .map_err(AppError::Database)?;
 
-    for participant_id in participant_ids {
+    for participant_id in &participant_ids {
         sqlx::query("INSERT INTO chat_room_members (room_id, user_id) VALUES (?, ?)")
             .bind(room_id)
-            .bind(participant_id)
+            .bind(*participant_id)
             .execute(&mut *tx)
             .await
             .map_err(AppError::Database)?;
     }
 
     tx.commit().await.map_err(AppError::Database)?;
+
+    // Invalidate caches for all participants + creator
+    for pid in &participant_ids {
+        state.cache.invalidate_chat_for_user(*pid).await;
+        state
+            .cache
+            .invalidate_accessible_room(*pid, room_id)
+            .await;
+    }
+    state.cache.invalidate_chat_for_user(user.id).await;
+    state
+        .cache
+        .invalidate_accessible_room(user.id, room_id)
+        .await;
+    state.cache.invalidate_chat_for_room(room_id).await;
 
     // Emit notification
     if let Ok(event) = persist_notification(
@@ -336,6 +351,8 @@ pub async fn invite_to_room(
     .await
     .map_err(AppError::Database)?;
 
+    state.cache.pending_invites.invalidate(&invited_user.id).await;
+
     Ok(Redirect::to(&room.path).into_response())
 }
 
@@ -388,6 +405,14 @@ pub async fn accept_invite(
     .map_err(AppError::Database)?;
 
     tx.commit().await.map_err(AppError::Database)?;
+
+    state.cache.invalidate_chat_for_user(user.id).await;
+    state
+        .cache
+        .invalidate_accessible_room(user.id, invite.room_id)
+        .await;
+    state.cache.invalidate_chat_for_room(invite.room_id).await;
+    state.cache.invalidate_all_unread_counts().await;
 
     // Emit notification
     if let Ok(event) = persist_notification(
@@ -548,49 +573,32 @@ async fn accessible_room(
     user_id: i64,
     room_id: i64,
 ) -> Result<Option<ChatRoomView>, AppError> {
-    let row = sqlx::query_as::<_, ChatRoomRow>(
-        r#"
-        SELECT
-            rooms.id,
-            rooms.name,
-            rooms.kind = 'general' AS is_general,
-            (SELECT COUNT(*) FROM chat_room_members members WHERE members.room_id = rooms.id) AS participant_count
-        FROM chat_rooms rooms
-        WHERE rooms.id = ?
-          AND (
-              rooms.kind = 'general'
-              OR EXISTS (
-                  SELECT 1
-                  FROM chat_room_members members
-                  WHERE members.room_id = rooms.id
-                    AND members.user_id = ?
-              )
-          )
-        "#,
-    )
-    .bind(room_id)
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
+    if let Some(room) = state.cache.accessible_room.get(&(user_id, room_id)).await {
+        return Ok(room);
+    }
 
-    Ok(row.map(|row| ChatRoomView {
-        path: room_path(row.id, row.is_general),
-        is_active: true,
-        id: row.id,
-        name: row.name,
-        is_general: row.is_general,
-        participant_count: row.participant_count,
-        unread_count: 0,
-    }))
+    let base_rooms = accessible_rooms_base(state, user_id).await?;
+    let room = base_rooms.into_iter().find(|r| r.id == room_id).map(|mut room| {
+        room.is_active = true;
+        room
+    });
+
+    state
+        .cache
+        .accessible_room
+        .insert((user_id, room_id), room.clone())
+        .await;
+    Ok(room)
 }
 
-async fn accessible_rooms(
+async fn accessible_rooms_base(
     state: &AppState,
     user_id: i64,
-    active_room_id: i64,
-    unread_counts: &HashMap<i64, i64>,
 ) -> Result<Vec<ChatRoomView>, AppError> {
+    if let Some(rooms) = state.cache.accessible_rooms.get(&user_id).await {
+        return Ok(rooms);
+    }
+
     let rows = sqlx::query_as::<_, ChatRoomRow>(
         r#"
         SELECT
@@ -614,27 +622,49 @@ async fn accessible_rooms(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(rows
+    let rooms: Vec<ChatRoomView> = rows
         .into_iter()
-        .map(|row| {
-            let unread = unread_counts.get(&row.id).copied().unwrap_or(0);
-            ChatRoomView {
-                path: room_path(row.id, row.is_general),
-                is_active: row.id == active_room_id,
-                id: row.id,
-                name: row.name,
-                is_general: row.is_general,
-                participant_count: row.participant_count,
-                unread_count: if row.id == active_room_id { 0 } else { unread },
-            }
+        .map(|row| ChatRoomView {
+            path: room_path(row.id, row.is_general),
+            is_active: false,
+            id: row.id,
+            name: row.name,
+            is_general: row.is_general,
+            participant_count: row.participant_count,
+            unread_count: 0,
         })
-        .collect())
+        .collect();
+
+    state.cache.accessible_rooms.insert(user_id, rooms.clone()).await;
+    Ok(rooms)
+}
+
+async fn accessible_rooms(
+    state: &AppState,
+    user_id: i64,
+    active_room_id: i64,
+    unread_counts: &HashMap<i64, i64>,
+) -> Result<Vec<ChatRoomView>, AppError> {
+    let mut rooms = accessible_rooms_base(state, user_id).await?;
+    for room in &mut rooms {
+        room.is_active = room.id == active_room_id;
+        room.unread_count = if room.id == active_room_id {
+            0
+        } else {
+            unread_counts.get(&room.id).copied().unwrap_or(0)
+        };
+    }
+    Ok(rooms)
 }
 
 async fn room_participants(
     state: &AppState,
     room_id: i64,
 ) -> Result<Vec<ChatParticipant>, AppError> {
+    if let Some(participants) = state.cache.room_participants.get(&room_id).await {
+        return Ok(participants);
+    }
+
     let participants = sqlx::query_as::<_, ChatParticipant>(
         r#"
         SELECT users.id, users.name, users.email
@@ -649,6 +679,11 @@ async fn room_participants(
     .await
     .map_err(AppError::Database)?;
 
+    state
+        .cache
+        .room_participants
+        .insert(room_id, participants.clone())
+        .await;
     Ok(participants)
 }
 
@@ -656,6 +691,10 @@ async fn pending_invites_for_user(
     state: &AppState,
     user_id: i64,
 ) -> Result<Vec<PendingInviteView>, AppError> {
+    if let Some(invites) = state.cache.pending_invites.get(&user_id).await {
+        return Ok(invites);
+    }
+
     let invites = sqlx::query_as::<_, PendingInviteRow>(
         r#"
         SELECT
@@ -676,7 +715,7 @@ async fn pending_invites_for_user(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(invites
+    let views: Vec<PendingInviteView> = invites
         .into_iter()
         .map(|invite| PendingInviteView {
             accept_path: format!("/chat/invites/{}/accept", invite.id),
@@ -684,13 +723,20 @@ async fn pending_invites_for_user(
             invited_by_name: invite.invited_by_name,
             created_at: invite.created_at,
         })
-        .collect())
+        .collect();
+
+    state.cache.pending_invites.insert(user_id, views.clone()).await;
+    Ok(views)
 }
 
 async fn recent_messages(
     state: &AppState,
     room_id: i64,
 ) -> Result<Vec<ChatEvent>, AppError> {
+    if let Some(messages) = state.cache.chat_messages_by_room.get(&room_id).await {
+        return Ok(messages);
+    }
+
     let messages = sqlx::query_as::<_, ChatEvent>(
         r#"
         SELECT
@@ -714,7 +760,13 @@ async fn recent_messages(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(messages.into_iter().rev().collect())
+    let messages: Vec<ChatEvent> = messages.into_iter().rev().collect();
+    state
+        .cache
+        .chat_messages_by_room
+        .insert(room_id, messages.clone())
+        .await;
+    Ok(messages)
 }
 
 async fn persist_message(
@@ -737,6 +789,9 @@ async fn persist_message(
         .fetch_one(&state.pool)
         .await
         .map_err(AppError::Database)?;
+
+    state.cache.invalidate_chat_for_room(room_id).await;
+    state.cache.invalidate_all_unread_counts().await;
 
     Ok(ChatEvent {
         id,
@@ -779,6 +834,9 @@ async fn persist_message_with_file(
         .await
         .map_err(AppError::Database)?;
 
+    state.cache.invalidate_chat_for_room(room_id).await;
+    state.cache.invalidate_all_unread_counts().await;
+
     Ok(ChatEvent {
         id,
         room_id,
@@ -814,6 +872,9 @@ async fn persist_notification(
         .await
         .map_err(AppError::Database)?;
 
+    state.cache.invalidate_chat_for_room(room_id).await;
+    state.cache.invalidate_all_unread_counts().await;
+
     Ok(ChatEvent {
         id,
         room_id,
@@ -846,6 +907,8 @@ async fn update_read_position(
     .execute(&state.pool)
     .await
     .map_err(AppError::Database)?;
+
+    state.cache.unread_counts.invalidate(&user_id).await;
     Ok(())
 }
 
@@ -853,6 +916,10 @@ async fn get_unread_counts(
     state: &AppState,
     user_id: i64,
 ) -> Result<HashMap<i64, i64>, AppError> {
+    if let Some(counts) = state.cache.unread_counts.get(&user_id).await {
+        return Ok(counts);
+    }
+
     let rows = sqlx::query_as::<_, (i64, i64)>(
         r#"
         SELECT rooms.id,
@@ -873,19 +940,39 @@ async fn get_unread_counts(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(rows.into_iter().collect())
+    let counts: HashMap<i64, i64> = rows.into_iter().collect();
+    state.cache.unread_counts.insert(user_id, counts.clone()).await;
+    Ok(counts)
 }
 
 async fn users_by_ids(state: &AppState, ids: &[i64]) -> Result<Vec<User>, AppError> {
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let query = format!("SELECT id, name, email FROM users WHERE id IN ({})", placeholders);
-    let mut request = sqlx::query_as::<_, User>(&query);
+    let mut users = Vec::with_capacity(ids.len());
+    let mut missing = Vec::new();
 
     for id in ids {
-        request = request.bind(id);
+        if let Some(user) = state.cache.user_by_id.get(id).await {
+            users.push(user);
+        } else {
+            missing.push(*id);
+        }
     }
 
-    let users = request.fetch_all(&state.pool).await.map_err(AppError::Database)?;
+    if !missing.is_empty() {
+        let placeholders = missing.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let query = format!("SELECT id, name, email FROM users WHERE id IN ({})", placeholders);
+        let mut request = sqlx::query_as::<_, User>(&query);
+
+        for id in &missing {
+            request = request.bind(id);
+        }
+
+        let fetched = request.fetch_all(&state.pool).await.map_err(AppError::Database)?;
+        for user in &fetched {
+            state.cache.user_by_id.insert(user.id, user.clone()).await;
+        }
+        users.extend(fetched);
+    }
+
     Ok(users)
 }
 
@@ -933,6 +1020,19 @@ pub async fn serve_file(
         return Ok(Redirect::to("/login").into_response());
     };
 
+    if let Some((data, name, content_type)) = state.cache.chat_file.get(&message_id).await {
+        let disposition = format!("inline; filename=\"{}\"", name.replace('"', "\\\""));
+        return Ok((
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, content_type),
+                (axum::http::header::CONTENT_DISPOSITION, disposition),
+                (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable".to_string()),
+            ],
+            data,
+        ).into_response());
+    }
+
     let row = sqlx::query_as::<_, (Vec<u8>, String, String)>(
         "SELECT file_data, file_name, file_content_type FROM chat_messages WHERE id = ? AND file_data IS NOT NULL",
     )
@@ -945,12 +1045,19 @@ pub async fn serve_file(
         return Err(AppError::NotFound(format!("File for message {} not found", message_id)));
     };
 
+    state
+        .cache
+        .chat_file
+        .insert(message_id, (data.clone(), name.clone(), content_type.clone()))
+        .await;
+
     let disposition = format!("inline; filename=\"{}\"", name.replace('"', "\\\""));
     Ok((
         StatusCode::OK,
         [
             (axum::http::header::CONTENT_TYPE, content_type),
             (axum::http::header::CONTENT_DISPOSITION, disposition),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable".to_string()),
         ],
         data,
     ).into_response())

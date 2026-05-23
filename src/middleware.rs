@@ -23,14 +23,14 @@ pub async fn log_request_latency(
 
     let response = next.run(request).await;
     let status = response.status();
-    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+    let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
 
     state.request_metrics.record(path.clone(), elapsed_ms);
     log_latency(
         method.as_str(),
         &path,
         status,
-        elapsed_ms as f64,
+        elapsed_ms,
     );
 
     response

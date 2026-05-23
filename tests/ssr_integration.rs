@@ -5,6 +5,7 @@ use axum::{
 };
 use rust_api_ssr::{
     app::create_router,
+    cache::AppCache,
     handlers::{AppState, LoginRateLimiter, RequestMetrics},
     models::user::SqliteUserRepository,
     services::users::hash_password,
@@ -158,7 +159,11 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
     .await
     .expect("seed users");
 
-    let user_repo = Arc::new(SqliteUserRepository::new(pool.clone()));
+    let cache = AppCache::new();
+    let user_repo = Arc::new(rust_api_ssr::cache::CachedUserRepository::new(
+        Arc::new(SqliteUserRepository::new(pool.clone())),
+        cache.clone(),
+    ));
     let (chat_tx, _) = broadcast::channel(100);
     let app = create_router(AppState {
         user_repo,
@@ -167,6 +172,7 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
         request_metrics: RequestMetrics::default(),
         cookie_secure: false,
         login_rate_limiter: LoginRateLimiter::new(5, 900),
+        cache,
     });
     (app, pool)
 }

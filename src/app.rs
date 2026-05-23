@@ -39,6 +39,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/users", get(api::list_users))
         .route("/api/users/:id", get(api::get_user).delete(api::delete_user))
+        .route("/perf", get(views::render_perf))
         .layer(middleware::from_fn_with_state(state.clone(), log_request_latency))
         .with_state(state)
 }

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Performance{% endblock %}
+
+{% block content %}
+<div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow">
+    <h1 class="mb-4 text-xl font-bold text-slate-100">Request Performance</h1>
+
+    <div class="mb-8">
+        <canvas id="perfChart" height="120"></canvas>
+    </div>
+
+    <h2 class="mb-2 text-lg font-semibold text-slate-200">All Requests</h2>
+    <div class="overflow-x-auto rounded-2xl border border-white/5">
+        <table class="w-full text-left text-sm text-slate-300">
+            <thead class="bg-slate-800 text-xs uppercase text-slate-400">
+                <tr>
+                    <th class="px-4 py-3">Path</th>
+                    <th class="px-4 py-3 text-right">Latency (ms)</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-white/5">
+                {% for metric in request_metrics_all %}
+                <tr class="bg-white/[0.02]">
+                    <td class="px-4 py-2">{{ metric.path }}</td>
+                    <td class="px-4 py-2 text-right font-mono text-cyan-300">{{ metric.elapsed_ms }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const paths = [
+        {% for metric in request_metrics_all %}
+        "{{ metric.path }}",
+        {% endfor %}
+    ];
+    const latencies = [
+        {% for metric in request_metrics_all %}
+        {{ metric.elapsed_ms }},
+        {% endfor %}
+    ];
+
+    new Chart(document.getElementById('perfChart'), {
+        type: 'bar',
+        data: {
+            labels: paths,
+            datasets: [{
+                label: 'Latency (ms)',
+                data: latencies,
+                backgroundColor: 'rgba(34, 211, 238, 0.5)',
+                borderColor: 'rgba(34, 211, 238, 1)',
+                borderWidth: 1,
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: '#94a3b8' },
+                    grid: { color: 'rgba(255,255,255,0.05)' }
+                },
+                x: {
+                    ticks: { display: false },
+                    grid: { display: false }
+                }
+            },
+            plugins: {
+                legend: { labels: { color: '#94a3b8' } },
+                tooltip: {
+                    callbacks: {
+                        title: function(context) {
+                            return paths[context[0].dataIndex];
+                        }
+                    }
+                }
+            }
+        }
+    });
+</script>
+{% endblock %}

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Users{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -18,7 +19,6 @@
             },
         };
     </script>
-    <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="min-h-screen bg-slate-950 text-slate-100 antialiased selection:bg-cyan-300 selection:text-slate-950">
     <div class="pointer-events-none fixed inset-0 overflow-hidden">
@@ -65,7 +65,10 @@
         <div class="mb-3 w-[min(22rem,calc(100vw-1.5rem))] rounded-3xl border border-white/10 bg-slate-950/95 p-4 shadow-glow shadow-slate-950/50 backdrop-blur">
             <div class="mb-3 flex items-center justify-between">
                 <h2 class="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Recent requests</h2>
-                <span class="text-xs text-slate-500">ms</span>
+                <div class="flex items-center gap-2">
+                    <a class="text-xs text-cyan-300 hover:text-cyan-200 hover:underline" href="/perf">Graph</a>
+                    <span class="text-xs text-slate-500">ms</span>
+                </div>
             </div>
             <ul class="space-y-2">
                 {% for metric in request_metrics %}

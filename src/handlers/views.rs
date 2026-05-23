@@ -44,6 +44,14 @@ struct EditTemplate {
     form: UserFormView,
 }
 
+#[derive(Template)]
+#[template(path = "perf.html")]
+struct PerfTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
+    request_metrics_all: Vec<RequestMetric>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UserForm {
     name: String,
@@ -338,6 +346,23 @@ pub async fn delete_user(
     } else {
         Err(AppError::NotFound(format!("User with id {} not found", id)))
     }
+}
+
+pub async fn render_perf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let viewer = auth::current_user(&state, &headers).await?;
+    let request_metrics = state.request_metrics.recent();
+    let request_metrics_all = state.request_metrics.all();
+    render_template(
+        PerfTemplate {
+            viewer,
+            request_metrics,
+            request_metrics_all,
+        },
+        StatusCode::OK,
+    )
 }
 
 fn render_template<T: Template>(template: T, status: StatusCode) -> Result<Response, AppError> {

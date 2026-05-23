@@ -1,12 +1,22 @@
 use crate::error::AppError;
 use crate::handlers::AppState;
-use axum::{extract::State, http::StatusCode};
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::IntoResponse,
+};
 
-pub async fn health() -> StatusCode {
-    StatusCode::NO_CONTENT
+pub async fn health() -> impl IntoResponse {
+    (
+        StatusCode::NO_CONTENT,
+        [(header::CACHE_CONTROL, "no-store, must-revalidate")],
+    )
 }
 
-pub async fn readiness(State(state): State<AppState>) -> Result<StatusCode, AppError> {
+pub async fn readiness(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     state.user_service().list_users().await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::CACHE_CONTROL, "no-store, must-revalidate")],
+    ))
 }

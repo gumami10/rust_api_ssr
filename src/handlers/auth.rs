@@ -163,10 +163,11 @@ pub async fn logout(
 
     if let Some(token) = session_token(&headers) {
         sqlx::query("DELETE FROM sessions WHERE token = ?")
-            .bind(token)
+            .bind(&token)
             .execute(&state.pool)
             .await
             .map_err(AppError::Database)?;
+        state.cache.session_by_token.invalidate(&token).await;
     }
 
     let mut response = Redirect::to("/users").into_response();
@@ -198,6 +199,10 @@ pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<Optio
         return Ok(None);
     };
 
+    if let Some(user) = state.cache.session_by_token.get(&token).await {
+        return Ok(user);
+    }
+
     let user = sqlx::query_as::<_, User>(
         r#"
         SELECT users.id, users.name, users.email
@@ -207,11 +212,12 @@ pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<Optio
           AND sessions.created_at > datetime('now', '-30 days')
         "#,
     )
-    .bind(token)
+    .bind(&token)
     .fetch_optional(&state.pool)
     .await
     .map_err(AppError::Database)?;
 
+    state.cache.session_by_token.insert(token, user.clone()).await;
     Ok(user)
 }
 
