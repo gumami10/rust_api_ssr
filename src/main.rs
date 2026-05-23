@@ -38,6 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool: pool.clone(),
         chat_tx,
         request_metrics: RequestMetrics::default(),
+        cookie_secure: config.cookie_secure,
+        login_rate_limiter: rust_api_ssr::handlers::LoginRateLimiter::new(5, 900),
     };
 
     let app = create_router(state);

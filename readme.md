@@ -1,8 +1,6 @@
 # rust_api_ssr
 
-A small Rust API + server-side rendered web app built around fast response times and low operational overhead.
-
-The project uses Axum on Tokio for async HTTP handling, Askama for compile-time checked HTML templates, and SQLx with SQLite for the demo data layer. It currently serves a minimal users API, an SSR users page, and invite-only chat rooms from the same router.
+A Rust API and server-side rendered (SSR) web application built for fast response times and low operational overhead. It serves a JSON REST API, HTML pages, and a real-time WebSocket chat from a single service.
 
 ## Goals
 
@@ -12,57 +10,167 @@ The project uses Axum on Tokio for async HTTP handling, Askama for compile-time 
 - Keep shared application state cheap to clone through `Arc`.
 - Log per-request latency for quick feedback while tuning performance.
 
-## Current Features
-
-- `GET /` renders the users list as HTML with Askama.
-- `GET /api/users` returns all users as JSON.
-- `GET /api/users/:id` returns one user as JSON.
-- `GET /chat` renders the general chat room.
-- `GET /chat/rooms/:id` renders an invite-only room for participants.
-- `POST /chat/rooms` creates a private room with at least two participants.
-- Missing users return a structured JSON `404` response.
-- Request latency is logged by middleware.
-- Integration tests cover the API routes and SSR page.
-- A Python manual test script can start the server and exercise the routes.
-
 ## Tech Stack
 
-- Rust 2021
-- Tokio async runtime
-- Axum HTTP framework
-- Askama / Askama Axum for SSR templates
-- SQLx with SQLite
-- Serde / serde_json
-- Tracing with JSON-formatted logs
+- **Rust 2021**
+- **Tokio** async runtime
+- **Axum** HTTP framework (with WebSocket support)
+- **Askama / askama_axum** for compile-time checked HTML templates
+- **SQLx** with SQLite (compile-time checked queries, migrations)
+- **Serde / serde_json** for serialization
+- **Argon2** for password hashing
+- **Tracing** with JSON-formatted logs
+- **thiserror** for error handling
+
+## Architecture
+
+The codebase follows a layered architecture:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Handlers (src/handlers/)                                   │
+│  - api.rs       → JSON REST API endpoints                   │
+│  - views.rs     → SSR HTML page endpoints (users CRUD)      │
+│  - auth.rs      → Session-based login/logout                │
+│  - chat.rs      → Chat rooms, invites, WebSocket handler    │
+│  - health.rs    → Health (/healthz) and readiness (/readyz) │
+├─────────────────────────────────────────────────────────────┤
+│  Services (src/services/)                                   │
+│  - users.rs     → Business logic, password hashing, auth    │
+├─────────────────────────────────────────────────────────────┤
+│  Models / Repositories (src/models/)                        │
+│  - user.rs      → User struct, UserRepository trait,        │
+│                   SqliteUserRepository implementation         │
+├─────────────────────────────────────────────────────────────┤
+│  Infrastructure                                             │
+│  - app.rs       → Router construction                       │
+│  - error.rs     → AppError enum and IntoResponse mapping    │
+│  - middleware.rs→ Request latency logging                   │
+│  - config.rs    → Environment-based configuration           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+- **AppState is cloneable**: All shared state lives behind `Arc` or cheap clone types so Axum can clone it per request without performance issues.
+- **Repository trait**: `UserRepository` is a trait with an async implementation (`SqliteUserRepository`). This makes tests easy to inject and keeps handlers decoupled from SQLx directly.
+- **Service layer**: `UserService` contains business rules (duplicate email checks, password hashing, authentication). Handlers delegate to services, not repositories directly.
+- **Error handling**: A single `AppError` enum covers database, not-found, conflict, and internal errors. It implements `IntoResponse` so handlers can use `?` propagation.
+- **Templates**: Askama compiles HTML templates at build time. Runtime rendering is fast and many template errors are caught by `cargo check`.
+- **Latency middleware**: Every request is timed and logged via tracing (JSON). The last 8 request metrics are stored in a small in-memory ring buffer and displayed in the UI footer.
+
+## Features
+
+### Users
+- `GET /users` — SSR users list
+- `GET /users/:id` — SSR user profile
+- `GET /users/new` — SSR new user form
+- `POST /users` — create user (validates name, email, password ≥8 chars)
+- `GET /users/:id/edit` — SSR edit form
+- `POST /users/:id` — update user
+- `POST /users/:id/delete` — delete user
+- `GET /api/users` — JSON list all users
+- `GET /api/users/:id` — JSON get one user
+- `DELETE /api/users/:id` — delete user (API)
+
+### Authentication
+- `GET /login` — login form
+- `POST /login` — authenticate with email + password (Argon2 verified)
+- `POST /logout` — invalidate session cookie
+- Session cookies: `chat_session` token stored in SQLite `sessions` table, HttpOnly, SameSite=Lax
+- Creating a user automatically logs them in
+
+### Chat
+- `GET /chat` — general chat room (requires login)
+- `GET /chat/rooms/:id` — private room (members only)
+- `POST /chat/rooms` — create a private room with at least one other participant
+- `POST /chat/rooms/:id/invites` — invite a user to a private room
+- `POST /chat/invites/:id/accept` — accept a pending invitation
+- `GET /chat/ws?room_id=...` — WebSocket endpoint for real-time messages
+- `GET /chat/files/:message_id` — serve file attachments inline
+
+**Chat capabilities:**
+- Real-time messaging via WebSocket + `tokio::sync::broadcast` channel
+- Typing indicators (2-second debounce)
+- File sharing (base64 over WebSocket, stored as BLOB in SQLite)
+- Unread message badges per room (tracked via `chat_room_read_positions`)
+- System notification messages (e.g., "Alice created this room", "Bob joined")
+
+### Health
+- `GET /healthz` — liveness probe (always returns 204)
+- `GET /readyz` — readiness probe (queries database, returns 204)
 
 ## Project Structure
 
 ```text
 src/
-  main.rs              # binary entry point, logging, database setup, server bind
-  lib.rs               # library exports for app, handlers, models, middleware, errors
-  app.rs               # router construction
-  error.rs             # application error type and HTTP response mapping
-  middleware.rs        # request latency logging middleware
+  main.rs              # Entry point: logging, DB pool, migrations, server bind
+  lib.rs               # Module re-exports
+  app.rs               # Router construction with all routes
+  config.rs            # Config from environment variables
+  error.rs             # AppError and HTTP response mapping
+  middleware.rs        # Request latency logging
   handlers/
+    mod.rs             # AppState, RequestMetrics
     api.rs             # JSON API handlers
-    views.rs           # SSR page handler
-    mod.rs             # shared AppState
+    views.rs           # SSR page handlers (users CRUD)
+    auth.rs            # Session auth handlers
+    chat.rs            # Chat rooms, invites, WebSocket
+    health.rs          # Health and readiness endpoints
   models/
-    user.rs            # User model, repository trait, SQLite implementation
+    mod.rs
+    user.rs            # User, NewUser, UpdateUser, UserRepository trait, SqliteUserRepository
+  services/
+    mod.rs
+    users.rs           # UserService, password hashing, auth logic
 templates/
-  index.html           # Askama SSR template
+  base.html            # Base layout with nav, viewer context, metrics footer
+  users/
+    index.html         # Users list
+    show.html          # User profile
+    new.html           # New user form (with faker.js mock data buttons)
+    edit.html          # Edit user form
+    _form.html         # Shared form partial
+  auth/
+    login.html         # Login form
+  chat/
+    index.html         # Chat room page (messages, sidebar, WS client)
+migrations/
+  0001_create_users.sql
+  0002_auth_and_chat.sql
+  0003_chat_rooms.sql
+  0004_notifications_files_unread.sql
 tests/
-  api_integration.rs   # route integration tests
+  api_integration.rs   # API route tests
+  ssr_integration.rs   # SSR + auth + chat flow tests
 scripts/
-  k6-load-test.js     # k6 load test for read-only API and SSR routes
-  manual_api_test.py   # manual HTTP tester
+  manual_api_test.py   # Python manual HTTP tester
+  k6-load-test.js      # k6 load/performance test
+Dockerfile
+docker-compose.yml
 ```
 
-## Requirements
+## Database Schema
 
-- Rust toolchain with Cargo
-- Python 3, only if you want to use `scripts/manual_api_test.py`
+Managed via SQLx migrations in `./migrations`:
+
+1. **users** — `id`, `name`, `email` (unique), `password_hash`
+2. **sessions** — `token` (PK), `user_id`, `created_at`
+3. **chat_rooms** — `id`, `name`, `kind` (`general`/`private`), `created_by_user_id`, `created_at`
+4. **chat_room_members** — `room_id`, `user_id`, `joined_at`
+5. **chat_room_invites** — `id`, `room_id`, `invited_user_id`, `invited_by_user_id`, `status`, `created_at`, `accepted_at`
+6. **chat_messages** — `id`, `room_id`, `user_id`, `body`, `created_at`, `kind` (`user`/`notification`), `file_name`, `file_data`, `file_content_type`
+7. **chat_room_read_positions** — `room_id`, `user_id`, `last_read_message_id`, `updated_at`
+
+General room (`id = 1`) is seeded automatically by migrations.
+
+## Environment Variables
+
+| Variable       | Default                          | Description              |
+|----------------|----------------------------------|--------------------------|
+| `BIND_ADDRESS` | `0.0.0.0:3000`                   | Server bind address      |
+| `DATABASE_URL` | `sqlite://data.db`               | SQLite database URL      |
+| `RUST_LOG`     | `rust_api_ssr=info,axum=warn`    | Tracing log filter       |
 
 ## Run
 
@@ -70,30 +178,22 @@ scripts/
 cargo run
 ```
 
-The server listens on:
+Server listens on `http://127.0.0.1:3000` by default.
 
-```text
-http://127.0.0.1:3000
-```
-
-The binary currently binds to `0.0.0.0:3000`, so it is also reachable from other interfaces where allowed by your environment.
-
-## Docker
-
-Build and run the app in a container:
+### Docker
 
 ```bash
 docker build -t rust_api_ssr .
 docker run --rm -p 3000:3000 rust_api_ssr
 ```
 
-Or use Docker Compose:
+Or with Docker Compose:
 
 ```bash
 docker compose up --build
 ```
 
-The container uses the checked-in `data.db` file by default so the demo users remain available on first start.
+The container mounts `./data.db` so demo data persists across restarts.
 
 ## Test
 
@@ -103,19 +203,10 @@ Run the Rust integration tests:
 cargo test
 ```
 
-Run manual route checks with the helper script:
+Run the manual route checker:
 
 ```bash
 python3 scripts/manual_api_test.py --start-server check-all
-```
-
-Other useful manual commands:
-
-```bash
-python3 scripts/manual_api_test.py --start-server list-users
-python3 scripts/manual_api_test.py --start-server get-user 1
-python3 scripts/manual_api_test.py --start-server index
-python3 scripts/manual_api_test.py --start-server interactive
 ```
 
 Run the k6 load test:
@@ -124,13 +215,13 @@ Run the k6 load test:
 k6 run scripts/k6-load-test.js
 ```
 
-You can point it at another instance and tune the load with env vars:
+Tune k6 with environment variables:
 
 ```bash
 BASE_URL=http://127.0.0.1:3000 API_VUS=20 SSR_VUS=10 k6 run scripts/k6-load-test.js
 ```
 
-## API
+## API Reference
 
 ### `GET /api/users`
 
@@ -138,81 +229,28 @@ Returns:
 
 ```json
 [
-  {
-    "id": 1,
-    "name": "Alice",
-    "email": "alice@example.com"
-  },
-  {
-    "id": 2,
-    "name": "Bob",
-    "email": "bob@example.com"
-  }
+  { "id": 1, "name": "Alice", "email": "alice@example.com" },
+  { "id": 2, "name": "Bob", "email": "bob@example.com" }
 ]
 ```
 
 ### `GET /api/users/:id`
 
-Returns one user:
+Returns one user or `404`:
 
 ```json
-{
-  "id": 1,
-  "name": "Alice",
-  "email": "alice@example.com"
-}
+{ "error": "User with id 999 not found" }
 ```
 
-If the user does not exist:
+### `DELETE /api/users/:id`
 
-```json
-{
-  "error": "User with id 999 not found"
-}
-```
+Returns `204` on success or `404` if missing.
 
-## SSR Page
+## Notes for Agents / Contributors
 
-`GET /` renders `templates/index.html` with the same users loaded through the repository layer. Askama compiles the template at build time, which keeps rendering fast and catches many template mistakes before runtime.
-
-`GET /chat` renders the general room, and private rooms are available only to participants who were added at creation time or invited later by someone already in the room.
-
-## Latency-Oriented Design Notes
-
-This project is intentionally simple and direct:
-
-- Axum and Tokio provide async request handling without a large framework layer.
-- Handlers do only the route-specific work and delegate data access to a repository trait.
-- `AppState` is cloneable and stores shared services behind `Arc`.
-- Askama avoids runtime template lookup and parsing.
-- The latency middleware records elapsed milliseconds for every request.
-- JSON logs make latency data easy to consume in local tools or log pipelines.
-
-The demo uses an in-memory SQLite database and inserts sample users at startup. That keeps local startup and tests fast, but the data is not persistent.
-
-## Production Notes
-
-Before using this as a production service, consider:
-
-- Move the database URL, bind address, and pool size into configuration.
-- Use a persistent database instead of `sqlite::memory:`.
-- Add migrations for schema management.
-- Add health and readiness endpoints.
-- Add benchmarking for your target latency budget, for example with `wrk`, `oha`, or `bombardier`.
-- Tune database indexes and connection pool settings based on real traffic.
-- Add graceful shutdown.
-- Add stricter observability around p95/p99 latency, error rates, and saturation.
-
-## Environment
-
-`RUST_LOG` controls logging. If unset, the app defaults to:
-
-```text
-rust_api_ssr=debug,axum=debug
-```
-
-Example:
-
-```bash
-RUST_LOG=rust_api_ssr=info,axum=warn cargo run
-```
+- All SQL queries use SQLx and are checked at compile time against the migrations.
+- When adding a new migration, run `cargo sqlx prepare` if you use `SQLX_OFFLINE` builds.
+- Handlers should stay thin: validate input, call a service, return a response. Business logic belongs in `src/services/`.
+- The `AppState` owns the broadcast sender for chat. Any code that needs to push real-time events can clone `state.chat_tx`.
+- Templates extend `base.html` and receive `viewer` (Option<User>) and `request_metrics` for consistent navigation.
+- Tests use an in-memory SQLite database and `tower::ServiceExt::oneshot` to exercise routes without starting a real server.

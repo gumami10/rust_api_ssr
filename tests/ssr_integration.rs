@@ -5,7 +5,7 @@ use axum::{
 };
 use rust_api_ssr::{
     app::create_router,
-    handlers::{AppState, RequestMetrics},
+    handlers::{AppState, LoginRateLimiter, RequestMetrics},
     models::user::SqliteUserRepository,
     services::users::hash_password,
 };
@@ -165,6 +165,8 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
         pool: pool.clone(),
         chat_tx,
         request_metrics: RequestMetrics::default(),
+        cookie_secure: false,
+        login_rate_limiter: LoginRateLimiter::new(5, 900),
     });
     (app, pool)
 }
@@ -183,10 +185,17 @@ async fn request(
         .headers()
         .get(header::LOCATION)
         .map(|value| value.to_str().expect("valid location").to_string());
-    let set_cookie = response
+    let set_cookie: Vec<String> = response
         .headers()
-        .get(header::SET_COOKIE)
-        .map(|value| value.to_str().expect("valid cookie").to_string());
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|value| value.to_str().expect("valid cookie").to_string())
+        .collect();
+    let set_cookie = if set_cookie.is_empty() {
+        None
+    } else {
+        Some(set_cookie.join(", "))
+    };
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body")
@@ -225,10 +234,19 @@ async fn post_form(app: Router, uri: &str, form: &str) -> (StatusCode, Vec<u8>, 
 
 fn cookie_value(set_cookie: &str) -> String {
     set_cookie
-        .split(';')
-        .next()
-        .expect("cookie value")
+        .split(", ")
+        .find(|s| s.trim().starts_with("chat_session="))
+        .and_then(|s| s.split(';').next())
+        .expect("chat_session cookie")
         .to_string()
+}
+
+fn csrf_token_from_cookie(set_cookie: &str) -> Option<String> {
+    set_cookie
+        .split(", ")
+        .find(|s| s.trim().starts_with("csrf_token="))
+        .and_then(|s| s.split(';').next())
+        .map(|s| s.split_once('=').unwrap().1.to_string())
 }
 
 #[tokio::test]
@@ -554,6 +572,7 @@ async fn logout_invalidates_session() {
         .unwrap();
     let (_, _, _, set_cookie) = request(app.clone(), login_req).await;
     let cookie = cookie_value(set_cookie.as_deref().unwrap());
+    let csrf = csrf_token_from_cookie(set_cookie.as_deref().unwrap()).unwrap();
 
     // Verify chat access
     let (status, _, _, _) = request(
@@ -568,19 +587,21 @@ async fn logout_invalidates_session() {
     assert_eq!(status, StatusCode::OK);
 
     // Logout
+    let full_cookie = format!("{}; csrf_token={}", cookie, csrf);
     let (status, _, location, set_cookie) = request(
         app.clone(),
         Request::builder()
             .method("POST")
             .uri("/logout")
-            .header(header::COOKIE, &cookie)
-            .body(Body::empty())
+            .header(header::COOKIE, &full_cookie)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(format!("csrf_token={}", csrf)))
             .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location.as_deref(), Some("/users"));
-    assert!(set_cookie.unwrap().contains("Max-Age=0"));
+    assert!(set_cookie.as_deref().unwrap().contains("Max-Age=0"));
 
     // Verify chat access is gone
     let (status, _, _, _) = request(

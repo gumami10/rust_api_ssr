@@ -18,6 +18,9 @@ pub enum AppError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Forbidden")]
+    Forbidden,
+
     #[error("Internal server error")]
     Internal,
 }
@@ -36,6 +39,10 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => {
                 debug!("Not found: {}", msg);
                 (StatusCode::NOT_FOUND, msg.as_str())
+            }
+            AppError::Forbidden => {
+                debug!("Forbidden");
+                (StatusCode::FORBIDDEN, "Forbidden")
             }
             AppError::Internal => {
                 error!("Internal server error");
