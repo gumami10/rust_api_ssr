@@ -15,7 +15,7 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tokio::sync::broadcast;
 
 pub const GENERAL_ROOM_ID: i64 = 1;
@@ -31,6 +31,8 @@ pub struct ChatEvent {
     pub kind: String,
     pub file_name: Option<String>,
     pub file_content_type: Option<String>,
+    #[serde(default)]
+    pub is_encrypted: bool,
 }
 
 fn default_kind() -> String {
@@ -68,9 +70,10 @@ pub struct ChatRoomView {
     pub path: String,
     pub is_active: bool,
     pub unread_count: i64,
+    pub is_encrypted: bool,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, Serialize, FromRow)]
 pub struct ChatParticipant {
     pub id: i64,
     pub name: String,
@@ -78,12 +81,12 @@ pub struct ChatParticipant {
 }
 
 #[derive(Debug, Clone, FromRow)]
-struct PendingInviteRow {
-    id: i64,
-    room_id: i64,
-    room_name: String,
-    invited_by_name: String,
-    created_at: String,
+pub struct PendingInviteRow {
+    pub id: i64,
+    pub room_id: i64,
+    pub room_name: String,
+    pub invited_by_name: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +123,7 @@ struct ChatTemplate {
     rooms: Vec<ChatRoomView>,
     messages: Vec<ChatEvent>,
     participants: Vec<ChatParticipant>,
+    participants_json: String,
     all_users: Vec<User>,
     available_invitees: Vec<User>,
     pending_invites: Vec<PendingInviteView>,
@@ -130,11 +134,12 @@ pub async fn render_chat(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let Some(user) = auth::current_user(&state, &headers).await? else {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok(Redirect::to("/login").into_response());
     };
 
-    render_chat_room_page(&state, user, GENERAL_ROOM_ID, None).await
+    render_chat_room_page(&state, user, GENERAL_ROOM_ID, None, ctx).await
 }
 
 pub async fn render_chat_room(
@@ -142,11 +147,12 @@ pub async fn render_chat_room(
     headers: HeaderMap,
     Path(room_id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let Some(user) = auth::current_user(&state, &headers).await? else {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok(Redirect::to("/login").into_response());
     };
 
-    render_chat_room_page(&state, user, room_id, None).await
+    render_chat_room_page(&state, user, room_id, None, ctx).await
 }
 
 pub async fn create_chat_room(
@@ -154,7 +160,8 @@ pub async fn create_chat_room(
     headers: HeaderMap,
     Form(form): Form<CreateRoomForm>,
 ) -> Result<Response, AppError> {
-    let Some(user) = auth::current_user(&state, &headers).await? else {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok(Redirect::to("/login").into_response());
     };
 
@@ -173,17 +180,22 @@ pub async fn create_chat_room(
             user,
             GENERAL_ROOM_ID,
             Some("Add at least one other participant to create a private chat.".to_string()),
+            ctx,
         )
         .await;
     }
 
-    let selected_users = users_by_ids(&state, &participant_ids).await?;
+    let selected_users = state
+        .user_service
+        .get_users_by_ids(ctx, &participant_ids, &state.pool)
+        .await?;
     if selected_users.len() != participant_ids.len() {
         return render_chat_room_page(
             &state,
             user,
             GENERAL_ROOM_ID,
             Some("One or more selected users could not be found.".to_string()),
+            ctx,
         )
         .await;
     }
@@ -235,18 +247,12 @@ pub async fn create_chat_room(
 
     // Invalidate caches for all participants + creator
     for pid in &participant_ids {
-        state.cache.invalidate_chat_for_user(*pid).await;
-        state
-            .cache
-            .invalidate_accessible_room(*pid, room_id)
-            .await;
+        state.chat_service.invalidate_chat_for_user(*pid).await;
+        state.chat_service.invalidate_accessible_room(*pid, room_id).await;
     }
-    state.cache.invalidate_chat_for_user(user.id).await;
-    state
-        .cache
-        .invalidate_accessible_room(user.id, room_id)
-        .await;
-    state.cache.invalidate_chat_for_room(room_id).await;
+    state.chat_service.invalidate_chat_for_user(user.id).await;
+    state.chat_service.invalidate_accessible_room(user.id, room_id).await;
+    state.chat_service.invalidate_chat_for_room(room_id).await;
 
     // Emit notification
     if let Ok(event) = persist_notification(
@@ -265,11 +271,12 @@ pub async fn invite_to_room(
     Path(room_id): Path<i64>,
     Form(form): Form<InviteForm>,
 ) -> Result<Response, AppError> {
-    let Some(user) = auth::current_user(&state, &headers).await? else {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok(Redirect::to("/login").into_response());
     };
 
-    let Some(room) = accessible_room(&state, user.id, room_id).await? else {
+    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
         return Ok(Redirect::to("/chat").into_response());
     };
 
@@ -279,13 +286,14 @@ pub async fn invite_to_room(
             user,
             room_id,
             Some("The general chat cannot be restricted by invitation.".to_string()),
+            ctx,
         )
         .await;
     }
 
     let invited_user = state
-        .user_service()
-        .get_user(form.user_id)
+        .user_service
+        .get_user(ctx, form.user_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("User with id {} not found", form.user_id)))?;
 
@@ -295,17 +303,19 @@ pub async fn invite_to_room(
             user,
             room_id,
             Some("You cannot invite yourself.".to_string()),
+            ctx,
         )
         .await;
     }
 
-    let participants = room_participants(&state, room.id).await?;
+    let participants = state.chat_service.get_room_participants(ctx, room.id).await?;
     if participants.iter().any(|participant| participant.id == invited_user.id) {
         return render_chat_room_page(
             &state,
             user,
             room_id,
             Some("That user is already part of this chat.".to_string()),
+            ctx,
         )
         .await;
     }
@@ -329,6 +339,7 @@ pub async fn invite_to_room(
             user,
             room_id,
             Some("That user already has a pending invitation.".to_string()),
+            ctx,
         )
         .await;
     }
@@ -351,7 +362,7 @@ pub async fn invite_to_room(
     .await
     .map_err(AppError::Database)?;
 
-    state.cache.pending_invites.invalidate(&invited_user.id).await;
+    state.chat_service.invalidate_pending_invites(invited_user.id).await;
 
     Ok(Redirect::to(&room.path).into_response())
 }
@@ -361,7 +372,8 @@ pub async fn accept_invite(
     headers: HeaderMap,
     Path(invite_id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let Some(user) = auth::current_user(&state, &headers).await? else {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok(Redirect::to("/login").into_response());
     };
 
@@ -406,13 +418,10 @@ pub async fn accept_invite(
 
     tx.commit().await.map_err(AppError::Database)?;
 
-    state.cache.invalidate_chat_for_user(user.id).await;
-    state
-        .cache
-        .invalidate_accessible_room(user.id, invite.room_id)
-        .await;
-    state.cache.invalidate_chat_for_room(invite.room_id).await;
-    state.cache.invalidate_all_unread_counts().await;
+    state.chat_service.invalidate_chat_for_user(user.id).await;
+    state.chat_service.invalidate_accessible_room(user.id, invite.room_id).await;
+    state.chat_service.invalidate_chat_for_room(invite.room_id).await;
+    state.chat_service.invalidate_all_unread_counts().await;
 
     // Emit notification
     if let Ok(event) = persist_notification(
@@ -431,21 +440,23 @@ pub async fn chat_ws(
     Query(query): Query<RoomQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AppError> {
-    let Some(user) = auth::current_user(&state, &headers).await? else {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok(Redirect::to("/login").into_response());
     };
 
     let room_id = query.room_id.unwrap_or(GENERAL_ROOM_ID);
-    let Some(room) = accessible_room(&state, user.id, room_id).await? else {
+    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
         return Ok(Redirect::to("/chat").into_response());
     };
 
+    let is_encrypted = room.is_encrypted;
     Ok(ws
-        .on_upgrade(move |socket| handle_socket(socket, state, user, room.id))
+        .on_upgrade(move |socket| handle_socket(socket, state, user, room.id, is_encrypted))
         .into_response())
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState, user: User, room_id: i64) {
+async fn handle_socket(socket: WebSocket, state: AppState, user: User, room_id: i64, is_encrypted: bool) {
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.chat_tx.subscribe();
 
@@ -478,7 +489,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user: User, room_id: 
                                     };
                                     if let Ok(event) = persist_message_with_file(
                                         &state, &user, room_id, &display_body,
-                                        file_name, &file_bytes, &content_type,
+                                        file_name, &file_bytes, &content_type, is_encrypted,
                                     ).await {
                                         let _ = state.chat_tx.send(BroadcastEvent::Message(event));
                                     }
@@ -490,7 +501,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user: User, room_id: 
                                 continue;
                             }
 
-                            if let Ok(event) = persist_message(&state, &user, room_id, &body).await {
+                            if let Ok(event) = persist_message(&state, &user, room_id, &body, is_encrypted).await {
                                 let _ = state.chat_tx.send(BroadcastEvent::Message(event));
                             }
                         }
@@ -527,8 +538,9 @@ async fn render_chat_room_page(
     viewer: User,
     room_id: i64,
     error: Option<String>,
+    ctx: crate::context::QueryContext,
 ) -> Result<Response, AppError> {
-    let Some(room) = accessible_room(state, viewer.id, room_id).await? else {
+    let Some(room) = state.chat_service.get_room_for_user(ctx, viewer.id, room_id).await? else {
         return Ok(Redirect::to("/chat").into_response());
     };
 
@@ -536,19 +548,31 @@ async fn render_chat_room_page(
     let _ = update_read_position(state, viewer.id, room.id).await;
 
     let request_metrics = state.request_metrics.recent();
-    let messages = recent_messages(state, room.id).await?;
-    let participants = room_participants(state, room.id).await?;
+    let messages = state.chat_service.get_chat_messages(ctx, room.id).await?;
+    let participants = state.chat_service.get_room_participants(ctx, room.id).await?;
     let all_users = state
-        .user_service()
-        .list_users()
+        .user_service
+        .list_users(ctx)
         .await?
         .into_iter()
         .filter(|candidate| candidate.id != viewer.id)
         .collect::<Vec<_>>();
-    let pending_invites = pending_invites_for_user(state, viewer.id).await?;
-    let unread_counts = get_unread_counts(state, viewer.id).await?;
-    let rooms = accessible_rooms(state, viewer.id, room.id, &unread_counts).await?;
+    let pending_invites = state.chat_service.get_pending_invites(ctx, viewer.id).await?;
+    let unread_counts = state.chat_service.get_unread_counts(ctx, viewer.id).await?;
+
+    let active_room_id = room.id;
+    let mut rooms = state.chat_service.get_accessible_rooms(ctx, viewer.id).await?;
+    for room in &mut rooms {
+        room.is_active = room.id == active_room_id;
+        room.unread_count = if room.id == active_room_id {
+            0
+        } else {
+            unread_counts.get(&room.id).copied().unwrap_or(0)
+        };
+    }
+
     let available_invitees = available_invitees(&all_users, viewer.id, &participants);
+    let participants_json = serde_json::to_string(&participants).unwrap_or_else(|_| "[]".to_string());
 
     render_template(
         ChatTemplate {
@@ -559,6 +583,7 @@ async fn render_chat_room_page(
             rooms,
             messages,
             participants,
+            participants_json,
             all_users,
             available_invitees,
             pending_invites,
@@ -568,217 +593,18 @@ async fn render_chat_room_page(
     )
 }
 
-async fn accessible_room(
-    state: &AppState,
-    user_id: i64,
-    room_id: i64,
-) -> Result<Option<ChatRoomView>, AppError> {
-    if let Some(room) = state.cache.accessible_room.get(&(user_id, room_id)).await {
-        return Ok(room);
-    }
-
-    let base_rooms = accessible_rooms_base(state, user_id).await?;
-    let room = base_rooms.into_iter().find(|r| r.id == room_id).map(|mut room| {
-        room.is_active = true;
-        room
-    });
-
-    state
-        .cache
-        .accessible_room
-        .insert((user_id, room_id), room.clone())
-        .await;
-    Ok(room)
-}
-
-async fn accessible_rooms_base(
-    state: &AppState,
-    user_id: i64,
-) -> Result<Vec<ChatRoomView>, AppError> {
-    if let Some(rooms) = state.cache.accessible_rooms.get(&user_id).await {
-        return Ok(rooms);
-    }
-
-    let rows = sqlx::query_as::<_, ChatRoomRow>(
-        r#"
-        SELECT
-            rooms.id,
-            rooms.name,
-            rooms.kind = 'general' AS is_general,
-            (SELECT COUNT(*) FROM chat_room_members members WHERE members.room_id = rooms.id) AS participant_count
-        FROM chat_rooms rooms
-        WHERE rooms.kind = 'general'
-           OR EXISTS (
-               SELECT 1
-               FROM chat_room_members members
-               WHERE members.room_id = rooms.id
-                 AND members.user_id = ?
-           )
-        ORDER BY rooms.kind = 'general' DESC, rooms.created_at DESC, rooms.id DESC
-        "#,
-    )
-    .bind(user_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
-
-    let rooms: Vec<ChatRoomView> = rows
-        .into_iter()
-        .map(|row| ChatRoomView {
-            path: room_path(row.id, row.is_general),
-            is_active: false,
-            id: row.id,
-            name: row.name,
-            is_general: row.is_general,
-            participant_count: row.participant_count,
-            unread_count: 0,
-        })
-        .collect();
-
-    state.cache.accessible_rooms.insert(user_id, rooms.clone()).await;
-    Ok(rooms)
-}
-
-async fn accessible_rooms(
-    state: &AppState,
-    user_id: i64,
-    active_room_id: i64,
-    unread_counts: &HashMap<i64, i64>,
-) -> Result<Vec<ChatRoomView>, AppError> {
-    let mut rooms = accessible_rooms_base(state, user_id).await?;
-    for room in &mut rooms {
-        room.is_active = room.id == active_room_id;
-        room.unread_count = if room.id == active_room_id {
-            0
-        } else {
-            unread_counts.get(&room.id).copied().unwrap_or(0)
-        };
-    }
-    Ok(rooms)
-}
-
-async fn room_participants(
-    state: &AppState,
-    room_id: i64,
-) -> Result<Vec<ChatParticipant>, AppError> {
-    if let Some(participants) = state.cache.room_participants.get(&room_id).await {
-        return Ok(participants);
-    }
-
-    let participants = sqlx::query_as::<_, ChatParticipant>(
-        r#"
-        SELECT users.id, users.name, users.email
-        FROM chat_room_members
-        INNER JOIN users ON users.id = chat_room_members.user_id
-        WHERE chat_room_members.room_id = ?
-        ORDER BY users.name
-        "#,
-    )
-    .bind(room_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
-
-    state
-        .cache
-        .room_participants
-        .insert(room_id, participants.clone())
-        .await;
-    Ok(participants)
-}
-
-async fn pending_invites_for_user(
-    state: &AppState,
-    user_id: i64,
-) -> Result<Vec<PendingInviteView>, AppError> {
-    if let Some(invites) = state.cache.pending_invites.get(&user_id).await {
-        return Ok(invites);
-    }
-
-    let invites = sqlx::query_as::<_, PendingInviteRow>(
-        r#"
-        SELECT
-            invites.id,
-            invites.room_id,
-            rooms.name AS room_name,
-            inviter.name AS invited_by_name,
-            invites.created_at
-        FROM chat_room_invites invites
-        INNER JOIN chat_rooms rooms ON rooms.id = invites.room_id
-        INNER JOIN users inviter ON inviter.id = invites.invited_by_user_id
-        WHERE invites.invited_user_id = ? AND invites.status = 'pending'
-        ORDER BY invites.created_at DESC
-        "#,
-    )
-    .bind(user_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
-
-    let views: Vec<PendingInviteView> = invites
-        .into_iter()
-        .map(|invite| PendingInviteView {
-            accept_path: format!("/chat/invites/{}/accept", invite.id),
-            room_name: invite.room_name,
-            invited_by_name: invite.invited_by_name,
-            created_at: invite.created_at,
-        })
-        .collect();
-
-    state.cache.pending_invites.insert(user_id, views.clone()).await;
-    Ok(views)
-}
-
-async fn recent_messages(
-    state: &AppState,
-    room_id: i64,
-) -> Result<Vec<ChatEvent>, AppError> {
-    if let Some(messages) = state.cache.chat_messages_by_room.get(&room_id).await {
-        return Ok(messages);
-    }
-
-    let messages = sqlx::query_as::<_, ChatEvent>(
-        r#"
-        SELECT
-            chat_messages.id,
-            chat_messages.room_id,
-            users.name AS user_name,
-            chat_messages.body,
-            chat_messages.created_at,
-            chat_messages.kind,
-            chat_messages.file_name,
-            chat_messages.file_content_type
-        FROM chat_messages
-        INNER JOIN users ON users.id = chat_messages.user_id
-        WHERE chat_messages.room_id = ?
-        ORDER BY chat_messages.id DESC
-        LIMIT 50
-        "#,
-    )
-    .bind(room_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
-
-    let messages: Vec<ChatEvent> = messages.into_iter().rev().collect();
-    state
-        .cache
-        .chat_messages_by_room
-        .insert(room_id, messages.clone())
-        .await;
-    Ok(messages)
-}
-
 async fn persist_message(
     state: &AppState,
     user: &User,
     room_id: i64,
     body: &str,
+    is_encrypted: bool,
 ) -> Result<ChatEvent, AppError> {
-    let result = sqlx::query("INSERT INTO chat_messages (room_id, user_id, body, kind) VALUES (?, ?, ?, 'user')")
+    let result = sqlx::query("INSERT INTO chat_messages (room_id, user_id, body, kind, is_encrypted) VALUES (?, ?, ?, 'user', ?)")
         .bind(room_id)
         .bind(user.id)
         .bind(body)
+        .bind(if is_encrypted { 1 } else { 0 })
         .execute(&state.pool)
         .await
         .map_err(AppError::Database)?;
@@ -790,8 +616,8 @@ async fn persist_message(
         .await
         .map_err(AppError::Database)?;
 
-    state.cache.invalidate_chat_for_room(room_id).await;
-    state.cache.invalidate_all_unread_counts().await;
+    state.chat_service.invalidate_chat_for_room(room_id).await;
+    state.chat_service.invalidate_all_unread_counts().await;
 
     Ok(ChatEvent {
         id,
@@ -802,6 +628,7 @@ async fn persist_message(
         kind: "user".to_string(),
         file_name: None,
         file_content_type: None,
+        is_encrypted,
     })
 }
 
@@ -813,13 +640,15 @@ async fn persist_message_with_file(
     file_name: &str,
     file_data: &[u8],
     content_type: &str,
+    is_encrypted: bool,
 ) -> Result<ChatEvent, AppError> {
     let result = sqlx::query(
-        "INSERT INTO chat_messages (room_id, user_id, body, kind, file_name, file_data, file_content_type) VALUES (?, ?, ?, 'user', ?, ?, ?)",
+        "INSERT INTO chat_messages (room_id, user_id, body, kind, is_encrypted, file_name, file_data, file_content_type) VALUES (?, ?, ?, 'user', ?, ?, ?, ?)",
     )
     .bind(room_id)
     .bind(user.id)
     .bind(body)
+    .bind(if is_encrypted { 1 } else { 0 })
     .bind(file_name)
     .bind(file_data)
     .bind(content_type)
@@ -834,8 +663,8 @@ async fn persist_message_with_file(
         .await
         .map_err(AppError::Database)?;
 
-    state.cache.invalidate_chat_for_room(room_id).await;
-    state.cache.invalidate_all_unread_counts().await;
+    state.chat_service.invalidate_chat_for_room(room_id).await;
+    state.chat_service.invalidate_all_unread_counts().await;
 
     Ok(ChatEvent {
         id,
@@ -846,6 +675,7 @@ async fn persist_message_with_file(
         kind: "user".to_string(),
         file_name: Some(file_name.to_string()),
         file_content_type: Some(content_type.to_string()),
+        is_encrypted,
     })
 }
 
@@ -856,7 +686,7 @@ async fn persist_notification(
     body: &str,
 ) -> Result<ChatEvent, AppError> {
     let result = sqlx::query(
-        "INSERT INTO chat_messages (room_id, user_id, body, kind) VALUES (?, ?, ?, 'notification')",
+        "INSERT INTO chat_messages (room_id, user_id, body, kind, is_encrypted) VALUES (?, ?, ?, 'notification', 0)",
     )
     .bind(room_id)
     .bind(user.id)
@@ -872,8 +702,8 @@ async fn persist_notification(
         .await
         .map_err(AppError::Database)?;
 
-    state.cache.invalidate_chat_for_room(room_id).await;
-    state.cache.invalidate_all_unread_counts().await;
+    state.chat_service.invalidate_chat_for_room(room_id).await;
+    state.chat_service.invalidate_all_unread_counts().await;
 
     Ok(ChatEvent {
         id,
@@ -884,6 +714,7 @@ async fn persist_notification(
         kind: "notification".to_string(),
         file_name: None,
         file_content_type: None,
+        is_encrypted: false,
     })
 }
 
@@ -908,72 +739,8 @@ async fn update_read_position(
     .await
     .map_err(AppError::Database)?;
 
-    state.cache.unread_counts.invalidate(&user_id).await;
+    state.chat_service.invalidate_chat_for_user(user_id).await;
     Ok(())
-}
-
-async fn get_unread_counts(
-    state: &AppState,
-    user_id: i64,
-) -> Result<HashMap<i64, i64>, AppError> {
-    if let Some(counts) = state.cache.unread_counts.get(&user_id).await {
-        return Ok(counts);
-    }
-
-    let rows = sqlx::query_as::<_, (i64, i64)>(
-        r#"
-        SELECT rooms.id,
-               (SELECT COUNT(*) FROM chat_messages
-                WHERE chat_messages.room_id = rooms.id
-                  AND chat_messages.id > COALESCE(
-                      (SELECT last_read_message_id FROM chat_room_read_positions
-                       WHERE room_id = rooms.id AND user_id = ?), 0)
-               ) AS unread
-        FROM chat_rooms rooms
-        WHERE rooms.kind = 'general'
-           OR EXISTS (SELECT 1 FROM chat_room_members WHERE room_id = rooms.id AND user_id = ?)
-        "#,
-    )
-    .bind(user_id)
-    .bind(user_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
-
-    let counts: HashMap<i64, i64> = rows.into_iter().collect();
-    state.cache.unread_counts.insert(user_id, counts.clone()).await;
-    Ok(counts)
-}
-
-async fn users_by_ids(state: &AppState, ids: &[i64]) -> Result<Vec<User>, AppError> {
-    let mut users = Vec::with_capacity(ids.len());
-    let mut missing = Vec::new();
-
-    for id in ids {
-        if let Some(user) = state.cache.user_by_id.get(id).await {
-            users.push(user);
-        } else {
-            missing.push(*id);
-        }
-    }
-
-    if !missing.is_empty() {
-        let placeholders = missing.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let query = format!("SELECT id, name, email FROM users WHERE id IN ({})", placeholders);
-        let mut request = sqlx::query_as::<_, User>(&query);
-
-        for id in &missing {
-            request = request.bind(id);
-        }
-
-        let fetched = request.fetch_all(&state.pool).await.map_err(AppError::Database)?;
-        for user in &fetched {
-            state.cache.user_by_id.insert(user.id, user.clone()).await;
-        }
-        users.extend(fetched);
-    }
-
-    Ok(users)
 }
 
 fn available_invitees(all_users: &[User], current_user_id: i64, participants: &[ChatParticipant]) -> Vec<User> {
@@ -1011,16 +778,137 @@ struct ChatInput {
     file_content_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct StorePublicKeyInput {
+    public_key: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublicKeyResponse {
+    public_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StoreRoomKeyInput {
+    user_id: i64,
+    encrypted_key: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomKeyResponse {
+    encrypted_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomKeyMembersResponse {
+    member_ids: Vec<i64>,
+}
+
+pub async fn get_public_key_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<i64>,
+) -> Result<Response, AppError> {
+    let ctx = crate::handlers::query_context(&headers);
+    let key = state.chat_service.get_public_key(ctx, user_id).await?;
+    let body = serde_json::to_string(&PublicKeyResponse { public_key: key }).map_err(|_| AppError::Internal)?;
+    Ok((StatusCode::OK, axum::http::header::HeaderMap::new(), body).into_response())
+}
+
+pub async fn store_public_key_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<StorePublicKeyInput>,
+) -> Result<Response, AppError> {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
+        return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
+    };
+    state.chat_service.store_public_key(user.id, &input.public_key).await?;
+    Ok((StatusCode::OK, "OK").into_response())
+}
+
+pub async fn get_room_key_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(room_id): Path<i64>,
+) -> Result<Response, AppError> {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
+        return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
+    };
+    let key = state.chat_service.get_encrypted_room_key(ctx, room_id, user.id).await?;
+    let body = serde_json::to_string(&RoomKeyResponse { encrypted_key: key }).map_err(|_| AppError::Internal)?;
+    Ok((StatusCode::OK, axum::http::header::HeaderMap::new(), body).into_response())
+}
+
+pub async fn store_room_key_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(room_id): Path<i64>,
+    axum::Json(input): axum::Json<StoreRoomKeyInput>,
+) -> Result<Response, AppError> {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
+        return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
+    };
+    // Only existing room members may upload keys for other users
+    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
+        return Ok((StatusCode::FORBIDDEN, "Forbidden").into_response());
+    };
+    if room.is_general {
+        return Ok((StatusCode::BAD_REQUEST, "General room does not use E2E keys").into_response());
+    }
+    state.chat_service.store_encrypted_room_key(room_id, input.user_id, &input.encrypted_key).await?;
+    Ok((StatusCode::OK, "OK").into_response())
+}
+
+pub async fn get_room_key_members_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(room_id): Path<i64>,
+) -> Result<Response, AppError> {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
+        return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
+    };
+    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
+        return Ok((StatusCode::FORBIDDEN, "Forbidden").into_response());
+    };
+    if room.is_general {
+        return Ok((StatusCode::BAD_REQUEST, "General room does not use E2E keys").into_response());
+    }
+    let member_ids = state.chat_service.get_room_key_member_ids(ctx, room_id).await?;
+    let body = serde_json::to_string(&RoomKeyMembersResponse { member_ids }).map_err(|_| AppError::Internal)?;
+    Ok((StatusCode::OK, axum::http::header::HeaderMap::new(), body).into_response())
+}
+
 pub async fn serve_file(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(message_id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let Some(_user) = auth::current_user(&state, &headers).await? else {
+    let ctx = crate::handlers::query_context(&headers);
+    let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok(Redirect::to("/login").into_response());
     };
 
-    if let Some((data, name, content_type)) = state.cache.chat_file.get(&message_id).await {
+    // Verify the requesting user is a member of the room this file belongs to.
+    let row = sqlx::query_as::<_, (i64,)>("SELECT room_id FROM chat_messages WHERE id = ?")
+        .bind(message_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(AppError::Database)?;
+
+    let Some((room_id,)) = row else {
+        return Err(AppError::NotFound(format!("File for message {} not found", message_id)));
+    };
+
+    let Some(_room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
+        return Err(AppError::NotFound(format!("File for message {} not found", message_id)));
+    };
+
+    if let Some((data, name, content_type)) = state.chat_service.get_chat_file(ctx, message_id).await? {
         let disposition = format!("inline; filename=\"{}\"", name.replace('"', "\\\""));
         return Ok((
             StatusCode::OK,
@@ -1033,34 +921,7 @@ pub async fn serve_file(
         ).into_response());
     }
 
-    let row = sqlx::query_as::<_, (Vec<u8>, String, String)>(
-        "SELECT file_data, file_name, file_content_type FROM chat_messages WHERE id = ? AND file_data IS NOT NULL",
-    )
-    .bind(message_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
-
-    let Some((data, name, content_type)) = row else {
-        return Err(AppError::NotFound(format!("File for message {} not found", message_id)));
-    };
-
-    state
-        .cache
-        .chat_file
-        .insert(message_id, (data.clone(), name.clone(), content_type.clone()))
-        .await;
-
-    let disposition = format!("inline; filename=\"{}\"", name.replace('"', "\\\""));
-    Ok((
-        StatusCode::OK,
-        [
-            (axum::http::header::CONTENT_TYPE, content_type),
-            (axum::http::header::CONTENT_DISPOSITION, disposition),
-            (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable".to_string()),
-        ],
-        data,
-    ).into_response())
+    Err(AppError::NotFound(format!("File for message {} not found", message_id)))
 }
 
 fn render_template<T: Template>(template: T, status: StatusCode) -> Result<Response, AppError> {

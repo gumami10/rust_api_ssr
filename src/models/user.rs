@@ -32,13 +32,25 @@ pub struct UserWithPassword {
 
 #[async_trait]
 pub trait UserRepository: Send + Sync {
-    async fn get_user_by_id(&self, id: i64) -> Result<Option<User>, sqlx::Error>;
-    async fn get_user_by_email(&self, email: &str) -> Result<Option<User>, sqlx::Error>;
+    async fn get_user_by_id(
+        &self,
+        ctx: crate::context::QueryContext,
+        id: i64,
+    ) -> Result<Option<User>, sqlx::Error>;
+    async fn get_user_by_email(
+        &self,
+        ctx: crate::context::QueryContext,
+        email: &str,
+    ) -> Result<Option<User>, sqlx::Error>;
     async fn get_user_with_password_by_email(
         &self,
+        ctx: crate::context::QueryContext,
         email: &str,
     ) -> Result<Option<UserWithPassword>, sqlx::Error>;
-    async fn list_users(&self) -> Result<Vec<User>, sqlx::Error>;
+    async fn list_users(
+        &self,
+        ctx: crate::context::QueryContext,
+    ) -> Result<Vec<User>, sqlx::Error>;
     async fn create_user(&self, user: NewUser) -> Result<User, sqlx::Error>;
     async fn update_user(&self, id: i64, user: UpdateUser) -> Result<Option<User>, sqlx::Error>;
     async fn delete_user(&self, id: i64) -> Result<bool, sqlx::Error>;
@@ -56,14 +68,22 @@ impl SqliteUserRepository {
 
 #[async_trait]
 impl UserRepository for SqliteUserRepository {
-    async fn get_user_by_id(&self, id: i64) -> Result<Option<User>, sqlx::Error> {
+    async fn get_user_by_id(
+        &self,
+        _ctx: crate::context::QueryContext,
+        id: i64,
+    ) -> Result<Option<User>, sqlx::Error> {
         sqlx::query_as::<_, User>("SELECT id, name, email FROM users WHERE id = ?")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
     }
 
-    async fn get_user_by_email(&self, email: &str) -> Result<Option<User>, sqlx::Error> {
+    async fn get_user_by_email(
+        &self,
+        _ctx: crate::context::QueryContext,
+        email: &str,
+    ) -> Result<Option<User>, sqlx::Error> {
         sqlx::query_as::<_, User>("SELECT id, name, email FROM users WHERE email = ?")
             .bind(email)
             .fetch_optional(&self.pool)
@@ -72,6 +92,7 @@ impl UserRepository for SqliteUserRepository {
 
     async fn get_user_with_password_by_email(
         &self,
+        _ctx: crate::context::QueryContext,
         email: &str,
     ) -> Result<Option<UserWithPassword>, sqlx::Error> {
         sqlx::query_as::<_, UserWithPassword>(
@@ -82,7 +103,10 @@ impl UserRepository for SqliteUserRepository {
         .await
     }
 
-    async fn list_users(&self) -> Result<Vec<User>, sqlx::Error> {
+    async fn list_users(
+        &self,
+        _ctx: crate::context::QueryContext,
+    ) -> Result<Vec<User>, sqlx::Error> {
         sqlx::query_as::<_, User>("SELECT id, name, email FROM users")
             .fetch_all(&self.pool)
             .await
@@ -97,7 +121,7 @@ impl UserRepository for SqliteUserRepository {
             .await?
             .last_insert_rowid();
 
-        self.get_user_by_id(id)
+        self.get_user_by_id(crate::context::QueryContext::default(), id)
             .await?
             .ok_or(sqlx::Error::RowNotFound)
     }
@@ -114,7 +138,7 @@ impl UserRepository for SqliteUserRepository {
             return Ok(None);
         }
 
-        self.get_user_by_id(id).await
+        self.get_user_by_id(crate::context::QueryContext::default(), id).await
     }
 
     async fn delete_user(&self, id: i64) -> Result<bool, sqlx::Error> {

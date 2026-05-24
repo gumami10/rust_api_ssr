@@ -155,8 +155,9 @@ pub async fn render_index(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let viewer = auth::current_user(&state, &headers).await?;
-    let users = state.user_service().list_users().await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
+    let users = state.user_service.list_users(ctx).await?;
     let request_metrics = state.request_metrics.recent();
     let template = IndexTemplate {
         viewer,
@@ -171,11 +172,12 @@ pub async fn render_user(
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let viewer = auth::current_user(&state, &headers).await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
     let request_metrics = state.request_metrics.recent();
     let user = state
-        .user_service()
-        .get_user(id)
+        .user_service
+        .get_user(ctx, id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("User with id {} not found", id)))?;
 
@@ -193,7 +195,8 @@ pub async fn render_new_user(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let viewer = auth::current_user(&state, &headers).await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
     let request_metrics = state.request_metrics.recent();
     render_template(
         NewTemplate {
@@ -210,7 +213,8 @@ pub async fn create_user(
     headers: HeaderMap,
     Form(form): Form<UserForm>,
 ) -> Result<Response, AppError> {
-    let viewer = auth::current_user(&state, &headers).await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
     let request_metrics = state.request_metrics.recent();
     let mut form = match UserFormView::validate("/users", "Create user", form, true) {
         Ok(form) => form,
@@ -227,7 +231,7 @@ pub async fn create_user(
     };
 
     let user = match state
-        .user_service()
+        .user_service
         .create_user(NewUser {
             name: form.name.clone(),
             email: form.email.clone(),
@@ -261,11 +265,12 @@ pub async fn render_edit_user(
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let viewer = auth::current_user(&state, &headers).await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
     let request_metrics = state.request_metrics.recent();
     let user = state
-        .user_service()
-        .get_user(id)
+        .user_service
+        .get_user(ctx, id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("User with id {} not found", id)))?;
 
@@ -285,7 +290,8 @@ pub async fn update_user(
     Path(id): Path<i64>,
     Form(form): Form<UserForm>,
 ) -> Result<Response, AppError> {
-    let viewer = auth::current_user(&state, &headers).await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
     let request_metrics = state.request_metrics.recent();
     let mut form = match UserFormView::validate(format!("/users/{}", id), "Save user", form, false)
     {
@@ -303,7 +309,7 @@ pub async fn update_user(
     };
 
     let user = match state
-        .user_service()
+        .user_service
         .update_user(
             id,
             UpdateUser {
@@ -339,7 +345,7 @@ pub async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let deleted = state.user_service().delete_user(id).await?;
+    let deleted = state.user_service.delete_user(id).await?;
 
     if deleted {
         Ok(Redirect::to("/users").into_response())
@@ -352,7 +358,8 @@ pub async fn render_perf(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let viewer = auth::current_user(&state, &headers).await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
     let request_metrics = state.request_metrics.recent();
     let request_metrics_all = state.request_metrics.all();
     render_template(

@@ -131,22 +131,34 @@ impl CachedUserRepository {
 
 #[async_trait::async_trait]
 impl UserRepository for CachedUserRepository {
-    async fn get_user_by_id(&self, id: i64) -> Result<Option<User>, sqlx::Error> {
-        if let Some(user) = self.cache.user_by_id.get(&id).await {
-            return Ok(Some(user));
+    async fn get_user_by_id(
+        &self,
+        ctx: crate::context::QueryContext,
+        id: i64,
+    ) -> Result<Option<User>, sqlx::Error> {
+        if !ctx.bypass_cache {
+            if let Some(user) = self.cache.user_by_id.get(&id).await {
+                return Ok(Some(user));
+            }
         }
-        let user = self.inner.get_user_by_id(id).await?;
+        let user = self.inner.get_user_by_id(ctx, id).await?;
         if let Some(ref user) = user {
             self.cache.user_by_id.insert(id, user.clone()).await;
         }
         Ok(user)
     }
 
-    async fn get_user_by_email(&self, email: &str) -> Result<Option<User>, sqlx::Error> {
-        if let Some(user) = self.cache.user_by_email.get(email).await {
-            return Ok(user);
+    async fn get_user_by_email(
+        &self,
+        ctx: crate::context::QueryContext,
+        email: &str,
+    ) -> Result<Option<User>, sqlx::Error> {
+        if !ctx.bypass_cache {
+            if let Some(user) = self.cache.user_by_email.get(email).await {
+                return Ok(user);
+            }
         }
-        let user = self.inner.get_user_by_email(email).await?;
+        let user = self.inner.get_user_by_email(ctx, email).await?;
         self.cache
             .user_by_email
             .insert(email.to_string(), user.clone())
@@ -156,12 +168,15 @@ impl UserRepository for CachedUserRepository {
 
     async fn get_user_with_password_by_email(
         &self,
+        ctx: crate::context::QueryContext,
         email: &str,
     ) -> Result<Option<UserWithPassword>, sqlx::Error> {
-        if let Some(user) = self.cache.user_with_password_by_email.get(email).await {
-            return Ok(user);
+        if !ctx.bypass_cache {
+            if let Some(user) = self.cache.user_with_password_by_email.get(email).await {
+                return Ok(user);
+            }
         }
-        let user = self.inner.get_user_with_password_by_email(email).await?;
+        let user = self.inner.get_user_with_password_by_email(ctx, email).await?;
         self.cache
             .user_with_password_by_email
             .insert(email.to_string(), user.clone())
@@ -169,11 +184,16 @@ impl UserRepository for CachedUserRepository {
         Ok(user)
     }
 
-    async fn list_users(&self) -> Result<Vec<User>, sqlx::Error> {
-        if let Some(users) = self.cache.all_users.get("all").await {
-            return Ok(users);
+    async fn list_users(
+        &self,
+        ctx: crate::context::QueryContext,
+    ) -> Result<Vec<User>, sqlx::Error> {
+        if !ctx.bypass_cache {
+            if let Some(users) = self.cache.all_users.get("all").await {
+                return Ok(users);
+            }
         }
-        let users = self.inner.list_users().await?;
+        let users = self.inner.list_users(ctx).await?;
         self.cache
             .all_users
             .insert("all".to_string(), users.clone())
@@ -195,7 +215,7 @@ impl UserRepository for CachedUserRepository {
     ) -> Result<Option<User>, sqlx::Error> {
         let old_email = match self.cache.user_by_id.get(&id).await {
             Some(u) => Some(u.email),
-            None => self.inner.get_user_by_id(id).await?.map(|u| u.email),
+            None => self.inner.get_user_by_id(crate::context::QueryContext::default(), id).await?.map(|u| u.email),
         };
 
         if let Some(email) = old_email {
@@ -214,7 +234,7 @@ impl UserRepository for CachedUserRepository {
     async fn delete_user(&self, id: i64) -> Result<bool, sqlx::Error> {
         let old_email = match self.cache.user_by_id.get(&id).await {
             Some(u) => Some(u.email),
-            None => self.inner.get_user_by_id(id).await?.map(|u| u.email),
+            None => self.inner.get_user_by_id(crate::context::QueryContext::default(), id).await?.map(|u| u.email),
         };
 
         if let Some(email) = old_email {

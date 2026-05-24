@@ -79,7 +79,8 @@ pub async fn render_login(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let viewer = current_user(&state, &headers).await?;
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = current_user(&state, &headers, ctx).await?;
     let request_metrics = state.request_metrics.recent();
     render_template(
         LoginTemplate {
@@ -128,8 +129,8 @@ pub async fn login(
     }
 
     let user = match state
-        .user_service()
-        .authenticate_user(&email, &form.password)
+        .user_service
+        .authenticate_user(crate::context::QueryContext::default(), &email, &form.password)
         .await
     {
         Ok(user) => user,
@@ -167,7 +168,7 @@ pub async fn logout(
             .execute(&state.pool)
             .await
             .map_err(AppError::Database)?;
-        state.cache.session_by_token.invalidate(&token).await;
+        state.user_service.invalidate_session(&token).await;
     }
 
     let mut response = Redirect::to("/users").into_response();
@@ -194,31 +195,23 @@ pub async fn logout(
     Ok(response)
 }
 
-pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<Option<User>, AppError> {
+pub async fn current_user(
+    state: &AppState,
+    headers: &HeaderMap,
+    ctx: crate::context::QueryContext,
+) -> Result<Option<User>, AppError> {
     let Some(token) = session_token(headers) else {
         return Ok(None);
     };
 
-    if let Some(user) = state.cache.session_by_token.get(&token).await {
-        return Ok(user);
-    }
-
-    let user = sqlx::query_as::<_, User>(
-        r#"
-        SELECT users.id, users.name, users.email
-        FROM sessions
-        INNER JOIN users ON users.id = sessions.user_id
-        WHERE sessions.token = ?
-          AND sessions.created_at > datetime('now', '-30 days')
-        "#,
-    )
-    .bind(&token)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(AppError::Database)?;
-
-    state.cache.session_by_token.insert(token, user.clone()).await;
-    Ok(user)
+    state
+        .user_service
+        .validate_session(ctx, &token, &state.pool)
+        .await
+        .map_err(|e| match e {
+            crate::services::users::UserServiceError::Database(err) => AppError::Database(err),
+            _ => AppError::Internal,
+        })
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {

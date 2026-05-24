@@ -2,6 +2,8 @@ use rust_api_ssr::app::create_router;
 use rust_api_ssr::config::Config;
 use rust_api_ssr::handlers::{AppState, RequestMetrics};
 use rust_api_ssr::models::user::SqliteUserRepository;
+use rust_api_ssr::services::chat::ChatService;
+use rust_api_ssr::services::users::UserService;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -32,19 +34,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ensure_schema(&pool).await?;
 
     let cache = rust_api_ssr::cache::AppCache::new();
-    let user_repo = Arc::new(rust_api_ssr::cache::CachedUserRepository::new(
-        Arc::new(SqliteUserRepository::new(pool.clone())),
-        cache.clone(),
-    ));
+    let user_repo: Arc<dyn rust_api_ssr::models::user::UserRepository + Send + Sync> = Arc::new(
+        rust_api_ssr::cache::CachedUserRepository::new(
+            Arc::new(SqliteUserRepository::new(pool.clone())),
+            cache.clone(),
+        ),
+    );
+    let user_service = UserService::new(Arc::clone(&user_repo), cache.clone());
+    let chat_service = ChatService::new(pool.clone(), cache.clone());
     let (chat_tx, _) = broadcast::channel(100);
     let state = AppState {
         user_repo,
+        user_service,
+        chat_service,
         pool: pool.clone(),
         chat_tx,
         request_metrics: RequestMetrics::default(),
         cookie_secure: config.cookie_secure,
         login_rate_limiter: rust_api_ssr::handlers::LoginRateLimiter::new(5, 900),
-        cache,
     };
 
     let app = create_router(state);

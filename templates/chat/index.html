@@ -35,9 +35,17 @@
                         <p class="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-300/80">Room</p>
                         <h2 class="mt-2 text-2xl font-black tracking-tight text-white">{{ room.name }}</h2>
                     </div>
-                    <span class="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">
-                        {% if room.is_general %}General{% else %}Private{% endif %}
-                    </span>
+                    <div class="flex items-center gap-2">
+                        {% if room.is_encrypted %}
+                        <span id="e2e-badge" class="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-emerald-200" title="End-to-end encrypted: only room members with their private key can read messages">
+                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 3.75h10.5a2.25 2.25 0 012.25 2.25v6a2.25 2.25 0 01-2.25 2.25H5.25a2.25 2.25 0 01-2.25-2.25v-6a2.25 2.25 0 012.25-2.25z"/></svg>
+                            <span id="e2e-badge-text">E2E Encrypted</span>
+                        </span>
+                        {% endif %}
+                        <span class="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">
+                            {% if room.is_general %}General{% else %}Private{% endif %}
+                        </span>
+                    </div>
                 </div>
 
                 <ul id="chat-messages" class="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
@@ -49,12 +57,17 @@
                                 <span class="h-px flex-1 bg-white/10"></span>
                             </li>
                         {% else %}
-                            <li class="rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20" data-message-id="{{ message.id }}">
+                            <li class="rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20" data-message-id="{{ message.id }}" data-is-encrypted="{% if message.is_encrypted %}true{% else %}false{% endif %}">
                                 <div class="flex items-center justify-between gap-3">
                                     <strong class="text-sm font-semibold text-cyan-200">{{ message.user_name }}</strong>
-                                    <span class="text-xs text-slate-500">{{ message.created_at }}</span>
+                                    <span class="flex items-center gap-2">
+                                        {% if message.is_encrypted %}
+                                            <svg class="h-3 w-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 3.75h10.5a2.25 2.25 0 012.25 2.25v6a2.25 2.25 0 01-2.25 2.25H5.25a2.25 2.25 0 01-2.25-2.25v-6a2.25 2.25 0 012.25-2.25z"/></svg>
+                                        {% endif %}
+                                        <span class="text-xs text-slate-500">{{ message.created_at }}</span>
+                                    </span>
                                 </div>
-                                <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">{{ message.body }}</p>
+                                <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200 message-body"{% if message.is_encrypted %} data-cipher="{{ message.body }}"{% endif %}>{% if message.is_encrypted %}[Encrypted]{% else %}{{ message.body }}{% endif %}</p>
                                 {% match message.file_name %}
                                 {% when Some with (fname) %}
                                     <a href="/chat/files/{{ message.id }}" target="_blank" class="mt-2 inline-flex items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/20">
@@ -232,10 +245,13 @@
     </section>
 
     <script>
-        (() => {
+        (async () => {
+            const ROOM_ID = {{ room.id }};
+            const IS_ENCRYPTED = {{ room.is_encrypted }};
+            const USER_ID = {{ user.id }};
             const messages = document.getElementById("chat-messages");
             const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-            const socket = new WebSocket(`${scheme}://${window.location.host}/chat/ws?room_id={{ room.id }}`);
+            const socket = new WebSocket(`${scheme}://${window.location.host}/chat/ws?room_id=${ROOM_ID}`);
             const form = document.getElementById("chat-form");
             const bodyInput = document.getElementById("chat-body");
             const fileInput = document.getElementById("file-input");
@@ -243,6 +259,7 @@
             const roomParticipantIds = document.getElementById("room-participant-ids");
             const typingIndicator = document.getElementById("typing-indicator");
             const typingNames = document.getElementById("typing-names");
+            const e2eBadgeText = document.getElementById("e2e-badge-text");
 
             const escapeHtml = (value) => String(value)
                 .replaceAll("&", "&amp;")
@@ -250,6 +267,286 @@
                 .replaceAll(">", "&gt;")
                 .replaceAll('"', "&quot;")
                 .replaceAll("'", "&#39;");
+
+            // ---- E2E Encryption helpers ----
+
+            const LS_PRIVATE_KEY = "e2e_private_key";
+            const LS_PUBLIC_KEY = "e2e_public_key";
+            const LS_ROOM_KEY = (id) => `e2e_room_key_${id}`;
+
+            async function getOrCreateUserKeys() {
+                let privJwk = localStorage.getItem(LS_PRIVATE_KEY);
+                let pubJwk = localStorage.getItem(LS_PUBLIC_KEY);
+                if (privJwk && pubJwk) {
+                    return { privateKey: JSON.parse(privJwk), publicKey: JSON.parse(pubJwk) };
+                }
+                const keyPair = await crypto.subtle.generateKey(
+                    { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+                    true,
+                    ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+                );
+                const privateKey = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+                const publicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+                localStorage.setItem(LS_PRIVATE_KEY, JSON.stringify(privateKey));
+                localStorage.setItem(LS_PUBLIC_KEY, JSON.stringify(publicKey));
+                return { privateKey, publicKey };
+            }
+
+            async function uploadPublicKey(publicKeyJwk) {
+                try {
+                    await fetch("/api/crypto/public-key", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ public_key: JSON.stringify(publicKeyJwk) }),
+                    });
+                } catch (e) {
+                    console.error("Failed to upload public key", e);
+                }
+            }
+
+            async function getUserPublicKey(userId) {
+                try {
+                    const res = await fetch(`/api/crypto/public-key/${userId}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    return data.public_key ? JSON.parse(data.public_key) : null;
+                } catch (e) {
+                    console.error("Failed to fetch public key for user", userId, e);
+                    return null;
+                }
+            }
+
+            async function getRoomKey() {
+                try {
+                    const res = await fetch(`/api/crypto/room-key/${ROOM_ID}`);
+                    if (!res.ok) return null;
+                    const data = await res.json();
+                    return data.encrypted_key || null;
+                } catch (e) {
+                    console.error("Failed to fetch room key", e);
+                    return null;
+                }
+            }
+
+            async function storeRoomKey(userId, encryptedKeyBase64) {
+                try {
+                    const res = await fetch(`/api/crypto/room-key/${ROOM_ID}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ user_id: userId, encrypted_key: encryptedKeyBase64 }),
+                    });
+                    if (!res.ok) {
+                        console.error("storeRoomKey failed with status", res.status, "for user", userId);
+                    }
+                    return res.ok;
+                } catch (e) {
+                    console.error("Failed to store room key for user", userId, e);
+                    return false;
+                }
+            }
+
+            async function getRoomKeyMembers() {
+                try {
+                    const res = await fetch(`/api/crypto/room-key/${ROOM_ID}/members`);
+                    if (!res.ok) return [];
+                    const data = await res.json();
+                    return data.member_ids || [];
+                } catch (e) {
+                    console.error("Failed to fetch room key members", e);
+                    return [];
+                }
+            }
+
+            async function importPrivateKey(jwk) {
+                return crypto.subtle.importKey("jwk", jwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["unwrapKey"]);
+            }
+
+            async function importPublicKey(jwk) {
+                return crypto.subtle.importKey("jwk", jwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["wrapKey"]);
+            }
+
+            async function generateRoomKey() {
+                return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+            }
+
+            async function wrapRoomKey(roomKey, publicKeyJwk) {
+                const publicKey = await importPublicKey(publicKeyJwk);
+                const wrapped = await crypto.subtle.wrapKey("jwk", roomKey, publicKey, { name: "RSA-OAEP" });
+                return btoa(String.fromCharCode(...new Uint8Array(wrapped)));
+            }
+
+            async function unwrapRoomKey(wrappedBase64, privateKeyJwk) {
+                const privateKey = await importPrivateKey(privateKeyJwk);
+                const wrapped = Uint8Array.from(atob(wrappedBase64), c => c.charCodeAt(0));
+                return crypto.subtle.unwrapKey("jwk", wrapped, privateKey, { name: "RSA-OAEP" }, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+            }
+
+            async function encryptMessage(plaintext, roomKey) {
+                const iv = crypto.getRandomValues(new Uint8Array(12));
+                const encoder = new TextEncoder();
+                const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, roomKey, encoder.encode(plaintext));
+                const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+                combined.set(iv);
+                combined.set(new Uint8Array(ciphertext), iv.length);
+                return btoa(String.fromCharCode(...combined));
+            }
+
+            async function decryptMessage(ciphertextBase64, roomKey) {
+                try {
+                    const combined = Uint8Array.from(atob(ciphertextBase64), c => c.charCodeAt(0));
+                    const iv = combined.slice(0, 12);
+                    const ciphertext = combined.slice(12);
+                    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, roomKey, ciphertext);
+                    return new TextDecoder().decode(decrypted);
+                } catch (e) {
+                    console.error("Decryption failed", e);
+                    return "[Unable to decrypt]";
+                }
+            }
+
+            // ---- E2E initialization (1-to-1 only) ----
+
+            let roomKey = null;
+            let userKeys = null;
+
+            if (IS_ENCRYPTED) {
+                userKeys = await getOrCreateUserKeys();
+                await uploadPublicKey(userKeys.publicKey);
+
+                // 1. Try localStorage first
+                const storedRoomKey = localStorage.getItem(LS_ROOM_KEY(ROOM_ID));
+                if (storedRoomKey) {
+                    try {
+                        roomKey = await crypto.subtle.importKey("jwk", JSON.parse(storedRoomKey), { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+                    } catch (e) {
+                        console.error("Failed to import stored room key", e);
+                        localStorage.removeItem(LS_ROOM_KEY(ROOM_ID));
+                    }
+                }
+
+                // 2. Try server
+                if (!roomKey) {
+                    const encryptedRoomKey = await getRoomKey();
+                    if (encryptedRoomKey) {
+                        try {
+                            roomKey = await unwrapRoomKey(encryptedRoomKey, userKeys.privateKey);
+                            const exported = await crypto.subtle.exportKey("jwk", roomKey);
+                            localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(exported));
+                        } catch (e) {
+                            console.error("Failed to unwrap room key", e);
+                        }
+                    }
+                }
+
+                // 3. If still no key, first visitor to this room generates it
+                if (!roomKey) {
+                    const keyMemberIds = await getRoomKeyMembers();
+                    if (keyMemberIds.length === 0) {
+                        try {
+                            roomKey = await generateRoomKey();
+                            const exported = await crypto.subtle.exportKey("jwk", roomKey);
+                            localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(exported));
+
+                            const selfWrapped = await wrapRoomKey(roomKey, userKeys.publicKey);
+                            await storeRoomKey(USER_ID, selfWrapped);
+                        } catch (e) {
+                            console.error("Failed to generate room key", e);
+                        }
+                    }
+                }
+
+                if (roomKey) {
+                    if (e2eBadgeText) e2eBadgeText.textContent = "E2E Ready";
+                } else {
+                    if (e2eBadgeText) e2eBadgeText.textContent = "E2E Pending";
+                }
+            }
+
+            // ---- Decrypt existing messages ----
+            async function decryptRenderedMessages() {
+                if (!IS_ENCRYPTED || !roomKey) return;
+                const items = messages.querySelectorAll('li[data-is-encrypted="true"]');
+                for (const item of items) {
+                    if (item.dataset.decryptFailed === "true") continue;
+                    const bodyEl = item.querySelector(".message-body");
+                    if (!bodyEl) continue;
+                    const cipher = bodyEl.dataset.cipher || bodyEl.textContent.trim();
+                    if (cipher && cipher !== "[Encrypted]" && cipher !== "[Unable to decrypt]") {
+                        const plain = await decryptMessage(cipher, roomKey);
+                        bodyEl.textContent = plain;
+                        bodyEl.dataset.cipher = cipher;
+                        if (plain === "[Unable to decrypt]") {
+                            item.dataset.decryptFailed = "true";
+                        }
+                    }
+                }
+            }
+            await decryptRenderedMessages();
+
+            // ---- Polling for 1-to-1 key exchange ----
+            if (IS_ENCRYPTED) {
+                const e2ePollInterval = setInterval(async () => {
+                    if (!userKeys) return;
+
+                    const participants = {{ participants_json|safe }};
+                    const other = participants.find(p => p.id !== USER_ID);
+
+                    // Always re-verify the server key to detect overwrites
+                    const serverEncryptedKey = await getRoomKey();
+                    if (serverEncryptedKey) {
+                        try {
+                            const serverKey = await unwrapRoomKey(serverEncryptedKey, userKeys.privateKey);
+                            const serverKeyJwk = await crypto.subtle.exportKey("jwk", serverKey);
+                            if (!roomKey) {
+                                roomKey = serverKey;
+                                localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(serverKeyJwk));
+                                if (e2eBadgeText) e2eBadgeText.textContent = "E2E Ready";
+                                await decryptRenderedMessages();
+                            } else {
+                                const localKeyJwk = await crypto.subtle.exportKey("jwk", roomKey);
+                                if (JSON.stringify(serverKeyJwk) !== JSON.stringify(localKeyJwk)) {
+                                    roomKey = serverKey;
+                                    localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(serverKeyJwk));
+                                    await decryptRenderedMessages();
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Failed to sync room key from server", e);
+                        }
+                    }
+
+                    // Share our key with the other participant
+                    if (roomKey && other) {
+                        try {
+                            const keyMemberIds = await getRoomKeyMembers();
+                            if (!keyMemberIds.includes(other.id)) {
+                                const pubKey = await getUserPublicKey(other.id);
+                                if (pubKey) {
+                                    const wrapped = await wrapRoomKey(roomKey, pubKey);
+                                    await storeRoomKey(other.id, wrapped);
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Failed to share room key with other", e);
+                        }
+                    }
+                }, 3000);
+            }
+
+            // ---- Chat UI helpers ----
+
+            const appendNotification = (text) => {
+                const item = document.createElement("li");
+                item.className = "flex items-center gap-3 px-4 py-2";
+                item.innerHTML = `
+                    <span class="h-px flex-1 bg-amber-400/20"></span>
+                    <span class="text-xs font-medium text-amber-300 italic">${escapeHtml(text)}</span>
+                    <span class="h-px flex-1 bg-amber-400/20"></span>
+                `;
+                messages.appendChild(item);
+                messages.scrollTop = messages.scrollHeight;
+                setTimeout(() => item.remove(), 8000);
+            };
 
             const appendMessage = (message) => {
                 if (!message || !message.body) {
@@ -266,7 +563,15 @@
                         <span class="h-px flex-1 bg-white/10"></span>
                     `;
                 } else {
+                    const isEncrypted = message.is_encrypted && IS_ENCRYPTED;
                     item.className = "rounded-2xl border border-white/10 bg-slate-950/70 p-4 shadow-lg shadow-slate-950/20";
+                    if (isEncrypted) {
+                        item.setAttribute("data-is-encrypted", "true");
+                    }
+                    let lockIcon = "";
+                    if (isEncrypted) {
+                        lockIcon = `<svg class="h-3 w-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 3.75h10.5a2.25 2.25 0 012.25 2.25v6a2.25 2.25 0 01-2.25 2.25H5.25a2.25 2.25 0 01-2.25-2.25v-6a2.25 2.25 0 012.25-2.25z"/></svg>`;
+                    }
                     let fileLink = "";
                     if (message.file_name) {
                         fileLink = `<a href="/chat/files/${message.id}" target="_blank" class="mt-2 inline-flex items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/20">
@@ -277,11 +582,22 @@
                     item.innerHTML = `
                         <div class="flex items-center justify-between gap-3">
                             <strong class="text-sm font-semibold text-cyan-200">${escapeHtml(message.user_name || "Guest")}</strong>
-                            <span class="text-xs text-slate-500">${escapeHtml(message.created_at || "")}</span>
+                            <span class="flex items-center gap-2">
+                                ${lockIcon}
+                                <span class="text-xs text-slate-500">${escapeHtml(message.created_at || "")}</span>
+                            </span>
                         </div>
-                        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">${escapeHtml(message.body)}</p>
+                        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200 message-body">${escapeHtml(message.body)}</p>
                         ${fileLink}
                     `;
+                    if (isEncrypted && roomKey) {
+                        (async () => {
+                            const bodyEl = item.querySelector(".message-body");
+                            const plain = await decryptMessage(message.body, roomKey);
+                            bodyEl.textContent = plain;
+                            bodyEl.dataset.cipher = message.body;
+                        })();
+                    }
                 }
 
                 messages.appendChild(item);
@@ -320,9 +636,9 @@
                         updateTypingDisplay();
                     } else if (data.type === "message") {
                         appendMessage(data);
-                        // Clear typing for this user when they send a message
                         typingUsers.delete(data.user_name);
                         updateTypingDisplay();
+
                     }
                 } catch (_) {
                     // Ignore malformed frames.
@@ -350,9 +666,9 @@
             }
 
             if (form && bodyInput) {
-                form.addEventListener("submit", (event) => {
+                form.addEventListener("submit", async (event) => {
                     event.preventDefault();
-                    const body = bodyInput.value.trim();
+                    const rawBody = bodyInput.value.trim();
                     const file = fileInput ? fileInput.files[0] : null;
 
                     // Stop typing indicator
@@ -362,16 +678,37 @@
                     }
                     clearTimeout(typingTimer);
 
+                    let body = rawBody;
+
+                    if (IS_ENCRYPTED && !roomKey) {
+                        appendNotification("Encryption setup in progress, please wait a moment before sending.");
+                        return;
+                    }
+
                     if (file) {
                         const reader = new FileReader();
                         reader.onload = () => {
                             const b64 = reader.result.split(",")[1];
-                            socket.send(JSON.stringify({
-                                body: body || null,
-                                file_data: b64,
-                                file_name: file.name,
-                                file_content_type: file.type || "application/octet-stream",
-                            }));
+                            let fileBody = body || null;
+                            if (IS_ENCRYPTED && fileBody) {
+                                encryptMessage(fileBody, roomKey).then(encryptedBody => {
+                                    socket.send(JSON.stringify({
+                                        body: encryptedBody,
+                                        file_data: b64,
+                                        file_name: file.name,
+                                        file_content_type: file.type || "application/octet-stream",
+                                    }));
+                                }).catch(err => {
+                                    console.error("File body encryption failed", err);
+                                });
+                            } else {
+                                socket.send(JSON.stringify({
+                                    body: fileBody,
+                                    file_data: b64,
+                                    file_name: file.name,
+                                    file_content_type: file.type || "application/octet-stream",
+                                }));
+                            }
                             bodyInput.value = "";
                             fileInput.value = "";
                             bodyInput.focus();
@@ -382,6 +719,16 @@
 
                     if (!body || socket.readyState !== WebSocket.OPEN) {
                         return;
+                    }
+
+                    if (IS_ENCRYPTED) {
+                        try {
+                            body = await encryptMessage(body, roomKey);
+                        } catch (e) {
+                            console.error("Encryption failed", e);
+                            appendNotification("Encryption failed, please try again.");
+                            return;
+                        }
                     }
 
                     socket.send(JSON.stringify({ body }));

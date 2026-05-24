@@ -1,3 +1,5 @@
+use crate::cache::AppCache;
+use crate::context::QueryContext;
 use crate::models::user::{NewUser, UpdateUser, User, UserRepository};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use password_hash::{rand_core::OsRng, SaltString};
@@ -18,25 +20,30 @@ pub enum UserServiceError {
 #[derive(Clone)]
 pub struct UserService {
     user_repo: Arc<dyn UserRepository + Send + Sync>,
+    cache: AppCache,
 }
 
 impl UserService {
-    pub fn new(user_repo: Arc<dyn UserRepository + Send + Sync>) -> Self {
-        Self { user_repo }
+    pub fn new(user_repo: Arc<dyn UserRepository + Send + Sync>, cache: AppCache) -> Self {
+        Self { user_repo, cache }
     }
 
-    pub async fn list_users(&self) -> Result<Vec<User>, UserServiceError> {
-        Ok(self.user_repo.list_users().await?)
+    pub async fn list_users(&self, ctx: QueryContext) -> Result<Vec<User>, UserServiceError> {
+        Ok(self.user_repo.list_users(ctx).await?)
     }
 
-    pub async fn get_user(&self, id: i64) -> Result<Option<User>, UserServiceError> {
-        Ok(self.user_repo.get_user_by_id(id).await?)
+    pub async fn get_user(
+        &self,
+        ctx: QueryContext,
+        id: i64,
+    ) -> Result<Option<User>, UserServiceError> {
+        Ok(self.user_repo.get_user_by_id(ctx, id).await?)
     }
 
     pub async fn create_user(&self, user: NewUser) -> Result<User, UserServiceError> {
         if self
             .user_repo
-            .get_user_by_email(&user.email)
+            .get_user_by_email(QueryContext::default(), &user.email)
             .await?
             .is_some()
         {
@@ -60,7 +67,7 @@ impl UserService {
         id: i64,
         user: UpdateUser,
     ) -> Result<Option<User>, UserServiceError> {
-        let current_user = match self.user_repo.get_user_by_id(id).await? {
+        let current_user = match self.user_repo.get_user_by_id(QueryContext::default(), id).await? {
             Some(user) => user,
             None => return Ok(None),
         };
@@ -68,7 +75,7 @@ impl UserService {
         if current_user.email != user.email
             && self
                 .user_repo
-                .get_user_by_email(&user.email)
+                .get_user_by_email(QueryContext::default(), &user.email)
                 .await?
                 .is_some()
         {
@@ -84,12 +91,13 @@ impl UserService {
 
     pub async fn authenticate_user(
         &self,
+        ctx: QueryContext,
         email: &str,
         password: &str,
     ) -> Result<User, UserServiceError> {
         let user = self
             .user_repo
-            .get_user_with_password_by_email(email)
+            .get_user_with_password_by_email(ctx, email)
             .await?
             .ok_or(UserServiceError::InvalidCredentials)?;
 
@@ -104,6 +112,78 @@ impl UserService {
             name: user.name,
             email: user.email,
         })
+    }
+
+    pub async fn validate_session(
+        &self,
+        ctx: QueryContext,
+        token: &str,
+        pool: &sqlx::SqlitePool,
+    ) -> Result<Option<User>, UserServiceError> {
+        if !ctx.bypass_cache {
+            if let Some(user) = self.cache.session_by_token.get(token).await {
+                return Ok(user);
+            }
+        }
+
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            SELECT users.id, users.name, users.email
+            FROM sessions
+            INNER JOIN users ON users.id = sessions.user_id
+            WHERE sessions.token = ?
+              AND sessions.created_at > datetime('now', '-30 days')
+            "#,
+        )
+        .bind(token)
+        .fetch_optional(pool)
+        .await
+        .map_err(UserServiceError::Database)?;
+
+        self.cache.session_by_token.insert(token.to_string(), user.clone()).await;
+        Ok(user)
+    }
+
+    pub async fn invalidate_session(&self, token: &str) {
+        self.cache.session_by_token.invalidate(token).await;
+    }
+
+    pub async fn get_users_by_ids(
+        &self,
+        ctx: QueryContext,
+        ids: &[i64],
+        pool: &sqlx::SqlitePool,
+    ) -> Result<Vec<User>, UserServiceError> {
+        let mut users = Vec::with_capacity(ids.len());
+        let mut missing = Vec::new();
+
+        for id in ids {
+            if !ctx.bypass_cache {
+                if let Some(user) = self.cache.user_by_id.get(id).await {
+                    users.push(user);
+                    continue;
+                }
+            }
+            missing.push(*id);
+        }
+
+        if !missing.is_empty() {
+            let placeholders = missing.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let query = format!("SELECT id, name, email FROM users WHERE id IN ({})", placeholders);
+            let mut request = sqlx::query_as::<_, User>(&query);
+
+            for id in &missing {
+                request = request.bind(id);
+            }
+
+            let fetched = request.fetch_all(pool).await.map_err(UserServiceError::Database)?;
+            for user in &fetched {
+                self.cache.user_by_id.insert(user.id, user.clone()).await;
+            }
+            users.extend(fetched);
+        }
+
+        Ok(users)
     }
 }
 

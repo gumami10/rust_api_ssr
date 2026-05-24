@@ -37,6 +37,23 @@ pub fn create_router(state: AppState) -> Router {
             "/chat/files/:id",
             get(crate::handlers::chat::serve_file),
         )
+        .route(
+            "/api/crypto/public-key/:user_id",
+            get(crate::handlers::chat::get_public_key_handler),
+        )
+        .route(
+            "/api/crypto/public-key",
+            post(crate::handlers::chat::store_public_key_handler),
+        )
+        .route(
+            "/api/crypto/room-key/:room_id",
+            get(crate::handlers::chat::get_room_key_handler)
+                .post(crate::handlers::chat::store_room_key_handler),
+        )
+        .route(
+            "/api/crypto/room-key/:room_id/members",
+            get(crate::handlers::chat::get_room_key_members_handler),
+        )
         .route("/api/users", get(api::list_users))
         .route("/api/users/:id", get(api::get_user).delete(api::delete_user))
         .route("/perf", get(views::render_perf))

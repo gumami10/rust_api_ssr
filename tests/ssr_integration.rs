@@ -8,11 +8,12 @@ use rust_api_ssr::{
     cache::AppCache,
     handlers::{AppState, LoginRateLimiter, RequestMetrics},
     models::user::SqliteUserRepository,
-    services::users::hash_password,
+    services::{chat::ChatService, users::UserService},
 };
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use serde_json::Value;
 use tower::ServiceExt;
 
 async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
@@ -115,6 +116,7 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
             body TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             kind TEXT NOT NULL DEFAULT 'user',
+            is_encrypted INTEGER NOT NULL DEFAULT 0,
             file_name TEXT,
             file_data BLOB,
             file_content_type TEXT
@@ -124,6 +126,34 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
     .execute(&pool)
     .await
     .expect("create chat_messages table");
+
+    sqlx::query(
+        r#"
+        CREATE TABLE user_public_keys (
+            user_id INTEGER PRIMARY KEY,
+            public_key TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create user_public_keys table");
+
+    sqlx::query(
+        r#"
+        CREATE TABLE chat_room_keys (
+            room_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            encrypted_key TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (room_id, user_id)
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("create chat_room_keys table");
 
     sqlx::query(
         r#"
@@ -140,8 +170,8 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
     .await
     .expect("create chat_room_read_positions table");
 
-    let alice_hash = hash_password("alice-password").expect("hash password");
-    let bob_hash = hash_password("bob-password").expect("hash password");
+    let alice_hash = rust_api_ssr::services::users::hash_password("alice-password").expect("hash password");
+    let bob_hash = rust_api_ssr::services::users::hash_password("bob-password").expect("hash password");
 
     sqlx::query(
         r#"
@@ -160,19 +190,24 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
     .expect("seed users");
 
     let cache = AppCache::new();
-    let user_repo = Arc::new(rust_api_ssr::cache::CachedUserRepository::new(
-        Arc::new(SqliteUserRepository::new(pool.clone())),
-        cache.clone(),
-    ));
+    let user_repo: Arc<dyn rust_api_ssr::models::user::UserRepository + Send + Sync> = Arc::new(
+        rust_api_ssr::cache::CachedUserRepository::new(
+            Arc::new(SqliteUserRepository::new(pool.clone())),
+            cache.clone(),
+        ),
+    );
+    let user_service = UserService::new(Arc::clone(&user_repo), cache.clone());
+    let chat_service = ChatService::new(pool.clone(), cache.clone());
     let (chat_tx, _) = broadcast::channel(100);
     let app = create_router(AppState {
         user_repo,
+        user_service,
+        chat_service,
         pool: pool.clone(),
         chat_tx,
         request_metrics: RequestMetrics::default(),
         cookie_secure: false,
         login_rate_limiter: LoginRateLimiter::new(5, 900),
-        cache,
     });
     (app, pool)
 }
@@ -761,7 +796,7 @@ async fn invite_validation_errors() {
         .method("POST")
         .uri("/login")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .body(Body::from("email=alice@example.com&password=alice-password"))
         .unwrap();
     let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
     let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
@@ -839,7 +874,7 @@ async fn serve_file_returns_not_found_for_missing_file() {
         .method("POST")
         .uri("/login")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .body(Body::from("email=alice@example.com&password=alice-password"))
         .unwrap();
     let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
     let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
@@ -881,7 +916,7 @@ async fn accept_invite_validation_errors() {
         .method("POST")
         .uri("/login")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .body(Body::from("email=alice@example.com&password=alice-password"))
         .unwrap();
     let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
     let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
@@ -962,7 +997,7 @@ async fn serve_file_success() {
         .method("POST")
         .uri("/login")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .body(Body::from("email=alice@example.com&password=alice-password"))
         .unwrap();
     let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
     let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
@@ -991,7 +1026,7 @@ async fn cannot_access_private_room_without_invite() {
         .method("POST")
         .uri("/login")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from("email=alice%40example.com&password=alice-password"))
+        .body(Body::from("email=alice@example.com&password=alice-password"))
         .unwrap();
     let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
     let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
@@ -1039,4 +1074,366 @@ async fn cannot_access_private_room_without_invite() {
 
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location.as_deref(), Some("/chat"));
+}
+
+#[tokio::test]
+async fn one_to_one_room_shows_e2e_badge() {
+    let app = test_app().await;
+
+    // Login Alice
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Create 1-to-1 room with Bob
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Secret&participant_ids=2"))
+        .unwrap();
+    let (_, _, location, _) = request(app.clone(), create_req).await;
+    let room_path = location.unwrap();
+
+    // Visit room page
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri(&room_path)
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    assert!(html.contains("E2E Encrypted"));
+}
+
+#[tokio::test]
+async fn multi_person_room_no_e2e_badge() {
+    let app = test_app().await;
+
+    // Create Carol
+    post_form(
+        app.clone(),
+        "/users",
+        "name=Carol&email=carol%40example.com&password=carol-password",
+    )
+    .await;
+
+    // Login Alice
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Create 3-person room with Bob and Carol
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Group&participant_ids=2,3"))
+        .unwrap();
+    let (_, _, location, _) = request(app.clone(), create_req).await;
+    let room_path = location.unwrap();
+
+    // Visit room page
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri(&room_path)
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    assert!(!html.contains("E2E Encrypted"));
+    assert!(html.contains("Private"));
+}
+
+#[tokio::test]
+async fn crypto_public_key_store_and_retrieve() {
+    let app = test_app().await;
+
+    // Login Alice
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Store public key for Alice (user_id=1)
+    let store_req = Request::builder()
+        .method("POST")
+        .uri("/api/crypto/public-key")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from(r#"{"public_key":"{\"kty\":\"RSA\",\"n\":\"test\"}"}"#))
+        .unwrap();
+    let (status, _, _, _) = request(app.clone(), store_req).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Retrieve public key for Alice
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri("/api/crypto/public-key/1")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let resp: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["public_key"].as_str().unwrap(), r#"{"kty":"RSA","n":"test"}"#);
+}
+
+#[tokio::test]
+async fn crypto_room_key_store_and_retrieve() {
+    let app = test_app().await;
+
+    // Login Alice
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Create 1-to-1 room with Bob (room_id will be 2)
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Secret&participant_ids=2"))
+        .unwrap();
+    let (_, _, _, _) = request(app.clone(), create_req).await;
+
+    // Store room key for Bob in room 2
+    let store_req = Request::builder()
+        .method("POST")
+        .uri("/api/crypto/room-key/2")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from(r#"{"user_id":2,"encrypted_key":"wrapped-key-123"}"#))
+        .unwrap();
+    let (status, _, _, _) = request(app.clone(), store_req).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Login Bob
+    let login_bob = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=bob@example.com&password=bob-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_bob).await;
+    let bob_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Bob retrieves his room key
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri("/api/crypto/room-key/2")
+            .header(header::COOKIE, &bob_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let resp: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["encrypted_key"].as_str().unwrap(), "wrapped-key-123");
+}
+
+#[tokio::test]
+async fn encrypted_message_renders_placeholder_on_room_page() {
+    let (app, pool) = test_app_with_pool().await;
+
+    // Login Alice
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Create 1-to-1 room with Bob
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Secret&participant_ids=2"))
+        .unwrap();
+    let (_, _, location, _) = request(app.clone(), create_req).await;
+    let room_path = location.unwrap();
+
+    // Insert an encrypted message directly
+    sqlx::query(
+        "INSERT INTO chat_messages (room_id, user_id, body, kind, is_encrypted) VALUES (2, 1, 'cipher-text-here', 'user', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert encrypted message");
+
+    // Visit room page
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri(&room_path)
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    assert!(html.contains("[Encrypted]</p>"));
+}
+
+#[tokio::test]
+async fn multi_person_room_message_is_not_encrypted() {
+    let (app, pool) = test_app_with_pool().await;
+
+    // Create Carol
+    post_form(
+        app.clone(),
+        "/users",
+        "name=Carol&email=carol%40example.com&password=carol-password",
+    )
+    .await;
+
+    // Login Alice
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    // Create 3-person room with Bob and Carol
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Group&participant_ids=2,3"))
+        .unwrap();
+    let (_, _, location, _) = request(app.clone(), create_req).await;
+    let room_path = location.unwrap();
+
+    // Insert a plain message directly
+    sqlx::query(
+        "INSERT INTO chat_messages (room_id, user_id, body, kind, is_encrypted) VALUES (2, 1, 'hello group', 'user', 0)",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert message");
+
+    // Visit room page
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri(&room_path)
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(body).unwrap();
+    assert!(html.contains("hello group</p>"));
+    assert!(!html.contains("[Encrypted]</p>"));
+}
+
+#[tokio::test]
+async fn chat_service_one_to_one_is_encrypted() {
+    let (app, pool) = test_app_with_pool().await;
+    let cache = AppCache::new();
+    let chat_service = ChatService::new(pool, cache);
+    let ctx = rust_api_ssr::context::QueryContext { bypass_cache: false };
+
+    // Login Alice and create 1-to-1 room
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Secret&participant_ids=2"))
+        .unwrap();
+    let (_, _, _, _) = request(app, create_req).await;
+
+    let room = chat_service.get_room_for_user(ctx, 1, 2).await.unwrap().unwrap();
+    assert!(room.is_encrypted);
+}
+
+#[tokio::test]
+async fn chat_service_multi_person_is_not_encrypted() {
+    let (app, pool) = test_app_with_pool().await;
+
+    // Create Carol
+    post_form(
+        app.clone(),
+        "/users",
+        "name=Carol&email=carol%40example.com&password=carol-password",
+    )
+    .await;
+
+    let cache = AppCache::new();
+    let chat_service = ChatService::new(pool, cache);
+    let ctx = rust_api_ssr::context::QueryContext { bypass_cache: false };
+
+    // Login Alice and create 3-person room
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("email=alice@example.com&password=alice-password"))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/chat/rooms")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, &alice_cookie)
+        .body(Body::from("name=Group&participant_ids=2,3"))
+        .unwrap();
+    let (_, _, _, _) = request(app, create_req).await;
+
+    let room = chat_service.get_room_for_user(ctx, 1, 2).await.unwrap().unwrap();
+    assert!(!room.is_encrypted);
 }

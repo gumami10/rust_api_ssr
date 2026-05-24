@@ -1,11 +1,23 @@
-use crate::cache::AppCache;
 use crate::models::user::UserRepository;
+use crate::services::chat::ChatService;
 use crate::services::users::UserService;
+use axum::http::HeaderMap;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
+
+pub fn query_context(headers: &HeaderMap) -> crate::context::QueryContext {
+    let bypass = headers
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("no-cache"))
+        .unwrap_or(false);
+    crate::context::QueryContext {
+        bypass_cache: bypass,
+    }
+}
 
 pub mod api;
 pub mod auth;
@@ -110,16 +122,11 @@ impl LoginRateLimiter {
 #[derive(Clone)]
 pub struct AppState {
     pub user_repo: Arc<dyn UserRepository + Send + Sync>,
+    pub user_service: UserService,
+    pub chat_service: ChatService,
     pub pool: SqlitePool,
     pub chat_tx: broadcast::Sender<crate::handlers::chat::BroadcastEvent>,
     pub request_metrics: RequestMetrics,
     pub cookie_secure: bool,
     pub login_rate_limiter: LoginRateLimiter,
-    pub cache: AppCache,
-}
-
-impl AppState {
-    pub fn user_service(&self) -> UserService {
-        UserService::new(Arc::clone(&self.user_repo))
-    }
 }
