@@ -29,8 +29,8 @@
         </div>
 
         <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <section class="rounded-3xl border border-white/10 bg-slate-900/75 p-4 shadow-lg shadow-slate-950/25 sm:p-6">
-                <div class="mb-4 flex items-center justify-between gap-3">
+            <section class="flex flex-col rounded-3xl border border-white/10 bg-slate-900/75 p-4 shadow-lg shadow-slate-950/25 sm:p-6 h-[calc(100vh-12rem)] min-h-0 max-xl:min-h-[48rem]">
+                <div class="mb-4 flex items-center justify-between gap-3 shrink-0">
                     <div>
                         <p class="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-300/80">Room</p>
                         <h2 class="mt-2 text-2xl font-black tracking-tight text-white">{{ room.name }}</h2>
@@ -48,7 +48,7 @@
                     </div>
                 </div>
 
-                <ul id="chat-messages" class="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+                <ul id="chat-messages" class="flex-1 space-y-3 overflow-y-auto pr-1">
                     {% for message in messages %}
                         {% if message.kind == "notification" %}
                             <li class="flex items-center gap-3 px-4 py-2" data-message-id="{{ message.id }}">
@@ -81,11 +81,23 @@
                     {% endfor %}
                 </ul>
 
-                <div id="typing-indicator" class="mt-3 hidden px-2">
+                <div id="typing-indicator" class="mt-3 hidden px-2 shrink-0">
                     <p class="text-xs text-slate-400 italic">
                         <span id="typing-names"></span> <span class="animate-pulse">typing…</span>
                     </p>
                 </div>
+
+                <form id="chat-form" class="mt-3 shrink-0 space-y-4 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                    <div class="space-y-2">
+                        <label class="text-sm font-semibold text-slate-200" for="chat-body">Send a message</label>
+                        <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="chat-body" name="body" autocomplete="off" placeholder="Type a message">
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-sm font-semibold text-slate-200" for="file-input">Attach file</label>
+                        <input class="w-full text-sm text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-cyan-400/10 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-cyan-200 hover:file:bg-cyan-400/20" id="file-input" type="file">
+                    </div>
+                    <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">Send</button>
+                </form>
             </section>
 
             <aside class="space-y-4 rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-lg shadow-slate-950/25">
@@ -113,21 +125,6 @@
                             </li>
                         {% endfor %}
                     </ul>
-                </section>
-
-                <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
-                    <form id="chat-form" class="space-y-4">
-                        <div class="space-y-2">
-                            <label class="text-sm font-semibold text-slate-200" for="chat-body">Send a message</label>
-                            <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="chat-body" name="body" autocomplete="off" placeholder="Type a message">
-                        </div>
-                        <div class="space-y-2">
-                            <label class="text-sm font-semibold text-slate-200" for="file-input">Attach file</label>
-                            <input class="w-full text-sm text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-cyan-400/10 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-cyan-200 hover:file:bg-cyan-400/20" id="file-input" type="file">
-                        </div>
-                        <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">Send</button>
-                    </form>
-                    <p class="text-sm leading-6 text-slate-400">Messages go only to the room you are currently viewing.</p>
                 </section>
 
                 <section class="space-y-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
@@ -438,20 +435,27 @@
                     }
                 }
 
-                // 3. If still no key, first visitor to this room generates it
+                // 3. If still no key, generate one and share with all existing members
                 if (!roomKey) {
-                    const keyMemberIds = await getRoomKeyMembers();
-                    if (keyMemberIds.length === 0) {
-                        try {
-                            roomKey = await generateRoomKey();
-                            const exported = await crypto.subtle.exportKey("jwk", roomKey);
-                            localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(exported));
+                    try {
+                        roomKey = await generateRoomKey();
+                        const exported = await crypto.subtle.exportKey("jwk", roomKey);
+                        localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(exported));
 
-                            const selfWrapped = await wrapRoomKey(roomKey, userKeys.publicKey);
-                            await storeRoomKey(USER_ID, selfWrapped);
-                        } catch (e) {
-                            console.error("Failed to generate room key", e);
+                        const selfWrapped = await wrapRoomKey(roomKey, userKeys.publicKey);
+                        await storeRoomKey(USER_ID, selfWrapped);
+
+                        const keyMemberIds = await getRoomKeyMembers();
+                        for (const memberId of keyMemberIds) {
+                            if (memberId == USER_ID) continue;
+                            const pubKey = await getUserPublicKey(memberId);
+                            if (pubKey) {
+                                const wrapped = await wrapRoomKey(roomKey, pubKey);
+                                await storeRoomKey(memberId, wrapped);
+                            }
                         }
+                    } catch (e) {
+                        console.error("Failed to set up room key", e);
                     }
                 }
 
@@ -515,19 +519,22 @@
                         }
                     }
 
-                    // Share our key with the other participant
-                    if (roomKey && other) {
+                    // Share our key with any room member who doesn't have one
+                    if (roomKey) {
                         try {
                             const keyMemberIds = await getRoomKeyMembers();
-                            if (!keyMemberIds.includes(other.id)) {
-                                const pubKey = await getUserPublicKey(other.id);
-                                if (pubKey) {
-                                    const wrapped = await wrapRoomKey(roomKey, pubKey);
-                                    await storeRoomKey(other.id, wrapped);
+                            for (const p of participants) {
+                                if (p.id === USER_ID) continue;
+                                if (!keyMemberIds.includes(p.id)) {
+                                    const pubKey = await getUserPublicKey(p.id);
+                                    if (pubKey) {
+                                        const wrapped = await wrapRoomKey(roomKey, pubKey);
+                                        await storeRoomKey(p.id, wrapped);
+                                    }
                                 }
                             }
                         } catch (e) {
-                            console.error("Failed to share room key with other", e);
+                            console.error("Failed to share room key", e);
                         }
                     }
                 }, 3000);
