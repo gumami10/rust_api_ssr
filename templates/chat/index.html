@@ -407,6 +407,7 @@
             let userKeys = null;
 
             if (IS_ENCRYPTED) {
+                const participants = {{ participants_json|safe }};
                 userKeys = await getOrCreateUserKeys();
                 await uploadPublicKey(userKeys.publicKey);
 
@@ -435,7 +436,7 @@
                     }
                 }
 
-                // 3. If still no key, generate one and share with all existing members
+                // 3. If still no key, generate one and share with all participants
                 if (!roomKey) {
                     try {
                         roomKey = await generateRoomKey();
@@ -445,13 +446,12 @@
                         const selfWrapped = await wrapRoomKey(roomKey, userKeys.publicKey);
                         await storeRoomKey(USER_ID, selfWrapped);
 
-                        const keyMemberIds = await getRoomKeyMembers();
-                        for (const memberId of keyMemberIds) {
-                            if (memberId == USER_ID) continue;
-                            const pubKey = await getUserPublicKey(memberId);
+                        for (const p of participants) {
+                            if (p.id === USER_ID) continue;
+                            const pubKey = await getUserPublicKey(p.id);
                             if (pubKey) {
                                 const wrapped = await wrapRoomKey(roomKey, pubKey);
-                                await storeRoomKey(memberId, wrapped);
+                                await storeRoomKey(p.id, wrapped);
                             }
                         }
                     } catch (e) {
@@ -492,7 +492,6 @@
                 const e2ePollInterval = setInterval(async () => {
                     if (!userKeys) return;
 
-                    const participants = {{ participants_json|safe }};
                     const other = participants.find(p => p.id !== USER_ID);
 
                     // Always re-verify the server key to detect overwrites
@@ -519,18 +518,15 @@
                         }
                     }
 
-                    // Share our key with any room member who doesn't have one
+                    // Share our key with all room members (overwrite to ensure convergence)
                     if (roomKey) {
                         try {
-                            const keyMemberIds = await getRoomKeyMembers();
                             for (const p of participants) {
                                 if (p.id === USER_ID) continue;
-                                if (!keyMemberIds.includes(p.id)) {
-                                    const pubKey = await getUserPublicKey(p.id);
-                                    if (pubKey) {
-                                        const wrapped = await wrapRoomKey(roomKey, pubKey);
-                                        await storeRoomKey(p.id, wrapped);
-                                    }
+                                const pubKey = await getUserPublicKey(p.id);
+                                if (pubKey) {
+                                    const wrapped = await wrapRoomKey(roomKey, pubKey);
+                                    await storeRoomKey(p.id, wrapped);
                                 }
                             }
                         } catch (e) {
