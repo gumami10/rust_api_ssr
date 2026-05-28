@@ -58,6 +58,7 @@ pub struct ChatRoomRow {
     pub id: i64,
     pub name: String,
     pub is_general: bool,
+    pub created_by_user_id: Option<i64>,
     pub participant_count: i64,
 }
 
@@ -66,6 +67,7 @@ pub struct ChatRoomView {
     pub id: i64,
     pub name: String,
     pub is_general: bool,
+    pub created_by_user_id: Option<i64>,
     pub participant_count: i64,
     pub path: String,
     pub is_active: bool,
@@ -200,11 +202,7 @@ pub async fn create_chat_room(
         .await;
     }
 
-    let room_name = form
-        .name
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let room_name = form.name.unwrap_or_default().trim().to_string();
     let room_name = if room_name.is_empty() {
         default_room_name(&selected_users)
     } else {
@@ -248,17 +246,27 @@ pub async fn create_chat_room(
     // Invalidate caches for all participants + creator
     for pid in &participant_ids {
         state.chat_service.invalidate_chat_for_user(*pid).await;
-        state.chat_service.invalidate_accessible_room(*pid, room_id).await;
+        state
+            .chat_service
+            .invalidate_accessible_room(*pid, room_id)
+            .await;
     }
     state.chat_service.invalidate_chat_for_user(user.id).await;
-    state.chat_service.invalidate_accessible_room(user.id, room_id).await;
+    state
+        .chat_service
+        .invalidate_accessible_room(user.id, room_id)
+        .await;
     state.chat_service.invalidate_chat_for_room(room_id).await;
 
     // Emit notification
     if let Ok(event) = persist_notification(
-        &state, &user, room_id,
+        &state,
+        &user,
+        room_id,
         &format!("{} created this room", user.name),
-    ).await {
+    )
+    .await
+    {
         let _ = state.chat_tx.send(BroadcastEvent::Message(event));
     }
 
@@ -276,7 +284,11 @@ pub async fn invite_to_room(
         return Ok(Redirect::to("/login").into_response());
     };
 
-    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
+    let Some(room) = state
+        .chat_service
+        .get_room_for_user(ctx, user.id, room_id)
+        .await?
+    else {
         return Ok(Redirect::to("/chat").into_response());
     };
 
@@ -308,8 +320,14 @@ pub async fn invite_to_room(
         .await;
     }
 
-    let participants = state.chat_service.get_room_participants(ctx, room.id).await?;
-    if participants.iter().any(|participant| participant.id == invited_user.id) {
+    let participants = state
+        .chat_service
+        .get_room_participants(ctx, room.id)
+        .await?;
+    if participants
+        .iter()
+        .any(|participant| participant.id == invited_user.id)
+    {
         return render_chat_room_page(
             &state,
             user,
@@ -344,7 +362,10 @@ pub async fn invite_to_room(
         .await;
     }
 
-    let member_ids: HashSet<i64> = participants.into_iter().map(|participant| participant.id).collect();
+    let member_ids: HashSet<i64> = participants
+        .into_iter()
+        .map(|participant| participant.id)
+        .collect();
     if !member_ids.contains(&user.id) {
         return Ok(Redirect::to("/chat").into_response());
     }
@@ -362,7 +383,10 @@ pub async fn invite_to_room(
     .await
     .map_err(AppError::Database)?;
 
-    state.chat_service.invalidate_pending_invites(invited_user.id).await;
+    state
+        .chat_service
+        .invalidate_pending_invites(invited_user.id)
+        .await;
 
     Ok(Redirect::to(&room.path).into_response())
 }
@@ -393,7 +417,10 @@ pub async fn accept_invite(
     .map_err(AppError::Database)?;
 
     let Some(invite) = invite else {
-        return Err(AppError::NotFound(format!("Invite with id {} not found", invite_id)));
+        return Err(AppError::NotFound(format!(
+            "Invite with id {} not found",
+            invite_id
+        )));
     };
 
     let mut tx = state.pool.begin().await.map_err(AppError::Database)?;
@@ -419,15 +446,25 @@ pub async fn accept_invite(
     tx.commit().await.map_err(AppError::Database)?;
 
     state.chat_service.invalidate_chat_for_user(user.id).await;
-    state.chat_service.invalidate_accessible_room(user.id, invite.room_id).await;
-    state.chat_service.invalidate_chat_for_room(invite.room_id).await;
+    state
+        .chat_service
+        .invalidate_accessible_room(user.id, invite.room_id)
+        .await;
+    state
+        .chat_service
+        .invalidate_chat_for_room(invite.room_id)
+        .await;
     state.chat_service.invalidate_all_unread_counts().await;
 
     // Emit notification
     if let Ok(event) = persist_notification(
-        &state, &user, invite.room_id,
+        &state,
+        &user,
+        invite.room_id,
         &format!("{} joined the room", user.name),
-    ).await {
+    )
+    .await
+    {
         let _ = state.chat_tx.send(BroadcastEvent::Message(event));
     }
 
@@ -446,7 +483,11 @@ pub async fn chat_ws(
     };
 
     let room_id = query.room_id.unwrap_or(GENERAL_ROOM_ID);
-    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
+    let Some(room) = state
+        .chat_service
+        .get_room_for_user(ctx, user.id, room_id)
+        .await?
+    else {
         return Ok(Redirect::to("/chat").into_response());
     };
 
@@ -456,7 +497,13 @@ pub async fn chat_ws(
         .into_response())
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState, user: User, room_id: i64, is_encrypted: bool) {
+async fn handle_socket(
+    socket: WebSocket,
+    state: AppState,
+    user: User,
+    room_id: i64,
+    is_encrypted: bool,
+) {
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.chat_tx.subscribe();
 
@@ -540,7 +587,11 @@ async fn render_chat_room_page(
     error: Option<String>,
     ctx: crate::context::QueryContext,
 ) -> Result<Response, AppError> {
-    let Some(room) = state.chat_service.get_room_for_user(ctx, viewer.id, room_id).await? else {
+    let Some(room) = state
+        .chat_service
+        .get_room_for_user(ctx, viewer.id, room_id)
+        .await?
+    else {
         return Ok(Redirect::to("/chat").into_response());
     };
 
@@ -549,7 +600,10 @@ async fn render_chat_room_page(
 
     let request_metrics = state.request_metrics.recent();
     let messages = state.chat_service.get_chat_messages(ctx, room.id).await?;
-    let participants = state.chat_service.get_room_participants(ctx, room.id).await?;
+    let participants = state
+        .chat_service
+        .get_room_participants(ctx, room.id)
+        .await?;
     let all_users = state
         .user_service
         .list_users(ctx)
@@ -557,11 +611,17 @@ async fn render_chat_room_page(
         .into_iter()
         .filter(|candidate| candidate.id != viewer.id)
         .collect::<Vec<_>>();
-    let pending_invites = state.chat_service.get_pending_invites(ctx, viewer.id).await?;
+    let pending_invites = state
+        .chat_service
+        .get_pending_invites(ctx, viewer.id)
+        .await?;
     let unread_counts = state.chat_service.get_unread_counts(ctx, viewer.id).await?;
 
     let active_room_id = room.id;
-    let mut rooms = state.chat_service.get_accessible_rooms(ctx, viewer.id).await?;
+    let mut rooms = state
+        .chat_service
+        .get_accessible_rooms(ctx, viewer.id)
+        .await?;
     for room in &mut rooms {
         room.is_active = room.id == active_room_id;
         room.unread_count = if room.id == active_room_id {
@@ -572,7 +632,8 @@ async fn render_chat_room_page(
     }
 
     let available_invitees = available_invitees(&all_users, viewer.id, &participants);
-    let participants_json = serde_json::to_string(&participants).unwrap_or_else(|_| "[]".to_string());
+    let participants_json =
+        serde_json::to_string(&participants).unwrap_or_else(|_| "[]".to_string());
 
     render_template(
         ChatTemplate {
@@ -743,8 +804,15 @@ async fn update_read_position(
     Ok(())
 }
 
-fn available_invitees(all_users: &[User], current_user_id: i64, participants: &[ChatParticipant]) -> Vec<User> {
-    let participant_ids: HashSet<i64> = participants.iter().map(|participant| participant.id).collect();
+fn available_invitees(
+    all_users: &[User],
+    current_user_id: i64,
+    participants: &[ChatParticipant],
+) -> Vec<User> {
+    let participant_ids: HashSet<i64> = participants
+        .iter()
+        .map(|participant| participant.id)
+        .collect();
     all_users
         .iter()
         .filter(|user| user.id != current_user_id && !participant_ids.contains(&user.id))
@@ -811,7 +879,8 @@ pub async fn get_public_key_handler(
 ) -> Result<Response, AppError> {
     let ctx = crate::handlers::query_context(&headers);
     let key = state.chat_service.get_public_key(ctx, user_id).await?;
-    let body = serde_json::to_string(&PublicKeyResponse { public_key: key }).map_err(|_| AppError::Internal)?;
+    let body = serde_json::to_string(&PublicKeyResponse { public_key: key })
+        .map_err(|_| AppError::Internal)?;
     Ok((StatusCode::OK, axum::http::header::HeaderMap::new(), body).into_response())
 }
 
@@ -824,7 +893,10 @@ pub async fn store_public_key_handler(
     let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
     };
-    state.chat_service.store_public_key(user.id, &input.public_key).await?;
+    state
+        .chat_service
+        .store_public_key(user.id, &input.public_key)
+        .await?;
     Ok((StatusCode::OK, "OK").into_response())
 }
 
@@ -837,8 +909,22 @@ pub async fn get_room_key_handler(
     let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
     };
-    let key = state.chat_service.get_encrypted_room_key(ctx, room_id, user.id).await?;
-    let body = serde_json::to_string(&RoomKeyResponse { encrypted_key: key }).map_err(|_| AppError::Internal)?;
+    let Some(room) = state
+        .chat_service
+        .get_room_for_user(ctx, user.id, room_id)
+        .await?
+    else {
+        return Ok((StatusCode::FORBIDDEN, "Forbidden").into_response());
+    };
+    if !room.is_encrypted {
+        return Ok((StatusCode::BAD_REQUEST, "Room does not use E2E keys").into_response());
+    }
+    let key = state
+        .chat_service
+        .get_encrypted_room_key(ctx, room_id, user.id)
+        .await?;
+    let body = serde_json::to_string(&RoomKeyResponse { encrypted_key: key })
+        .map_err(|_| AppError::Internal)?;
     Ok((StatusCode::OK, axum::http::header::HeaderMap::new(), body).into_response())
 }
 
@@ -852,14 +938,27 @@ pub async fn store_room_key_handler(
     let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
     };
-    // Only existing room members may upload keys for other users
-    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
+    let Some(room) = state
+        .chat_service
+        .get_room_for_user(ctx, user.id, room_id)
+        .await?
+    else {
         return Ok((StatusCode::FORBIDDEN, "Forbidden").into_response());
     };
-    if room.is_general {
-        return Ok((StatusCode::BAD_REQUEST, "General room does not use E2E keys").into_response());
+    if !room.is_encrypted {
+        return Ok((StatusCode::BAD_REQUEST, "Room does not use E2E keys").into_response());
     }
-    state.chat_service.store_encrypted_room_key(room_id, input.user_id, &input.encrypted_key).await?;
+    if !state
+        .chat_service
+        .is_room_member(ctx, room_id, input.user_id)
+        .await?
+    {
+        return Ok((StatusCode::FORBIDDEN, "Target user is not a room member").into_response());
+    }
+    state
+        .chat_service
+        .store_encrypted_room_key(room_id, input.user_id, &input.encrypted_key)
+        .await?;
     Ok((StatusCode::OK, "OK").into_response())
 }
 
@@ -872,14 +971,22 @@ pub async fn get_room_key_members_handler(
     let Some(user) = auth::current_user(&state, &headers, ctx).await? else {
         return Ok((StatusCode::UNAUTHORIZED, "Unauthorized").into_response());
     };
-    let Some(room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
+    let Some(room) = state
+        .chat_service
+        .get_room_for_user(ctx, user.id, room_id)
+        .await?
+    else {
         return Ok((StatusCode::FORBIDDEN, "Forbidden").into_response());
     };
-    if room.is_general {
-        return Ok((StatusCode::BAD_REQUEST, "General room does not use E2E keys").into_response());
+    if !room.is_encrypted {
+        return Ok((StatusCode::BAD_REQUEST, "Room does not use E2E keys").into_response());
     }
-    let member_ids = state.chat_service.get_room_key_member_ids(ctx, room_id).await?;
-    let body = serde_json::to_string(&RoomKeyMembersResponse { member_ids }).map_err(|_| AppError::Internal)?;
+    let member_ids = state
+        .chat_service
+        .get_room_key_member_ids(ctx, room_id)
+        .await?;
+    let body = serde_json::to_string(&RoomKeyMembersResponse { member_ids })
+        .map_err(|_| AppError::Internal)?;
     Ok((StatusCode::OK, axum::http::header::HeaderMap::new(), body).into_response())
 }
 
@@ -901,27 +1008,46 @@ pub async fn serve_file(
         .map_err(AppError::Database)?;
 
     let Some((room_id,)) = row else {
-        return Err(AppError::NotFound(format!("File for message {} not found", message_id)));
+        return Err(AppError::NotFound(format!(
+            "File for message {} not found",
+            message_id
+        )));
     };
 
-    let Some(_room) = state.chat_service.get_room_for_user(ctx, user.id, room_id).await? else {
-        return Err(AppError::NotFound(format!("File for message {} not found", message_id)));
+    let Some(_room) = state
+        .chat_service
+        .get_room_for_user(ctx, user.id, room_id)
+        .await?
+    else {
+        return Err(AppError::NotFound(format!(
+            "File for message {} not found",
+            message_id
+        )));
     };
 
-    if let Some((data, name, content_type)) = state.chat_service.get_chat_file(ctx, message_id).await? {
+    if let Some((data, name, content_type)) =
+        state.chat_service.get_chat_file(ctx, message_id).await?
+    {
         let disposition = format!("inline; filename=\"{}\"", name.replace('"', "\\\""));
         return Ok((
             StatusCode::OK,
             [
                 (axum::http::header::CONTENT_TYPE, content_type),
                 (axum::http::header::CONTENT_DISPOSITION, disposition),
-                (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable".to_string()),
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    "public, max-age=31536000, immutable".to_string(),
+                ),
             ],
             data,
-        ).into_response());
+        )
+            .into_response());
     }
 
-    Err(AppError::NotFound(format!("File for message {} not found", message_id)))
+    Err(AppError::NotFound(format!(
+        "File for message {} not found",
+        message_id
+    )))
 }
 
 fn render_template<T: Template>(template: T, status: StatusCode) -> Result<Response, AppError> {

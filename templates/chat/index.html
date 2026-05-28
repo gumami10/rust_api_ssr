@@ -246,6 +246,7 @@
             const ROOM_ID = {{ room.id }};
             const IS_ENCRYPTED = {{ room.is_encrypted }};
             const USER_ID = {{ user.id }};
+            const ROOM_KEY_OWNER_ID = {% match room.created_by_user_id %}{% when Some with (id) %}{{ id }}{% when None %}null{% endmatch %};
             const messages = document.getElementById("chat-messages");
             const scheme = window.location.protocol === "https:" ? "wss" : "ws";
             const socket = new WebSocket(`${scheme}://${window.location.host}/chat/ws?room_id=${ROOM_ID}`);
@@ -270,6 +271,7 @@
             const LS_PRIVATE_KEY = "e2e_private_key";
             const LS_PUBLIC_KEY = "e2e_public_key";
             const LS_ROOM_KEY = (id) => `e2e_room_key_${id}`;
+            const participants = {{ participants_json|safe }};
 
             async function getOrCreateUserKeys() {
                 let privJwk = localStorage.getItem(LS_PRIVATE_KEY);
@@ -362,6 +364,14 @@
                 return crypto.subtle.importKey("jwk", jwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["wrapKey"]);
             }
 
+            async function importRoomKey(jwk) {
+                return crypto.subtle.importKey("jwk", jwk, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+            }
+
+            async function exportRoomKey(roomKey) {
+                return crypto.subtle.exportKey("jwk", roomKey);
+            }
+
             async function generateRoomKey() {
                 return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
             }
@@ -375,7 +385,7 @@
             async function unwrapRoomKey(wrappedBase64, privateKeyJwk) {
                 const privateKey = await importPrivateKey(privateKeyJwk);
                 const wrapped = Uint8Array.from(atob(wrappedBase64), c => c.charCodeAt(0));
-                return crypto.subtle.unwrapKey("jwk", wrapped, privateKey, { name: "RSA-OAEP" }, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+                return crypto.subtle.unwrapKey("jwk", wrapped, privateKey, { name: "RSA-OAEP" }, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
             }
 
             async function encryptMessage(plaintext, roomKey) {
@@ -405,64 +415,107 @@
 
             let roomKey = null;
             let userKeys = null;
-
-            if (IS_ENCRYPTED) {
-                const participants = {{ participants_json|safe }};
+            if (window.crypto && crypto.subtle) {
                 userKeys = await getOrCreateUserKeys();
                 await uploadPublicKey(userKeys.publicKey);
+            }
 
-                // 1. Try localStorage first
+            const isRoomKeyOwner = IS_ENCRYPTED && ROOM_KEY_OWNER_ID === USER_ID;
+
+            function setE2eBadge(text) {
+                if (e2eBadgeText) e2eBadgeText.textContent = text;
+            }
+
+            async function persistRoomKeyLocally(key) {
+                const exported = await exportRoomKey(key);
+                localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(exported));
+            }
+
+            async function loadStoredRoomKey() {
                 const storedRoomKey = localStorage.getItem(LS_ROOM_KEY(ROOM_ID));
-                if (storedRoomKey) {
-                    try {
-                        roomKey = await crypto.subtle.importKey("jwk", JSON.parse(storedRoomKey), { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-                    } catch (e) {
-                        console.error("Failed to import stored room key", e);
-                        localStorage.removeItem(LS_ROOM_KEY(ROOM_ID));
+                if (!storedRoomKey) return null;
+                try {
+                    return await importRoomKey(JSON.parse(storedRoomKey));
+                } catch (e) {
+                    console.error("Failed to import stored room key", e);
+                    localStorage.removeItem(LS_ROOM_KEY(ROOM_ID));
+                    return null;
+                }
+            }
+
+            async function loadServerRoomKey() {
+                const encryptedRoomKey = await getRoomKey();
+                if (!encryptedRoomKey) return null;
+                try {
+                    const key = await unwrapRoomKey(encryptedRoomKey, userKeys.privateKey);
+                    await persistRoomKeyLocally(key);
+                    return key;
+                } catch (e) {
+                    console.error("Failed to unwrap room key", e);
+                    return null;
+                }
+            }
+
+            async function roomKeysMatch(left, right) {
+                if (!left || !right) return false;
+                try {
+                    const leftJwk = await exportRoomKey(left);
+                    const rightJwk = await exportRoomKey(right);
+                    return leftJwk.k === rightJwk.k;
+                } catch (e) {
+                    console.error("Failed to compare room keys", e);
+                    return false;
+                }
+            }
+
+            async function shareRoomKeyWithParticipants() {
+                if (!roomKey) return false;
+                let sharedWithEveryone = true;
+
+                for (const participant of participants) {
+                    const publicKey = participant.id === USER_ID
+                        ? userKeys.publicKey
+                        : await getUserPublicKey(participant.id);
+
+                    if (!publicKey) {
+                        sharedWithEveryone = false;
+                        continue;
                     }
+
+                    const wrapped = await wrapRoomKey(roomKey, publicKey);
+                    const stored = await storeRoomKey(participant.id, wrapped);
+                    sharedWithEveryone = sharedWithEveryone && stored;
                 }
 
-                // 2. Try server
-                if (!roomKey) {
-                    const encryptedRoomKey = await getRoomKey();
-                    if (encryptedRoomKey) {
-                        try {
-                            roomKey = await unwrapRoomKey(encryptedRoomKey, userKeys.privateKey);
-                            const exported = await crypto.subtle.exportKey("jwk", roomKey);
-                            localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(exported));
-                        } catch (e) {
-                            console.error("Failed to unwrap room key", e);
-                        }
+                return sharedWithEveryone;
+            }
+
+            if (IS_ENCRYPTED && !userKeys) {
+                setE2eBadge("E2E Unavailable");
+            } else if (IS_ENCRYPTED) {
+                if (isRoomKeyOwner) {
+                    roomKey = await loadStoredRoomKey();
+                    if (!roomKey) {
+                        roomKey = await loadServerRoomKey();
                     }
+                } else {
+                    roomKey = await loadServerRoomKey();
                 }
 
-                // 3. If still no key, generate one and share with all participants
-                if (!roomKey) {
+                if (!roomKey && isRoomKeyOwner) {
                     try {
                         roomKey = await generateRoomKey();
-                        const exported = await crypto.subtle.exportKey("jwk", roomKey);
-                        localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(exported));
-
-                        const selfWrapped = await wrapRoomKey(roomKey, userKeys.publicKey);
-                        await storeRoomKey(USER_ID, selfWrapped);
-
-                        for (const p of participants) {
-                            if (p.id === USER_ID) continue;
-                            const pubKey = await getUserPublicKey(p.id);
-                            if (pubKey) {
-                                const wrapped = await wrapRoomKey(roomKey, pubKey);
-                                await storeRoomKey(p.id, wrapped);
-                            }
-                        }
+                        await persistRoomKeyLocally(roomKey);
                     } catch (e) {
-                        console.error("Failed to set up room key", e);
+                        console.error("Failed to generate room key", e);
                     }
                 }
 
                 if (roomKey) {
-                    if (e2eBadgeText) e2eBadgeText.textContent = "E2E Ready";
+                    const shared = await shareRoomKeyWithParticipants();
+                    setE2eBadge(shared ? "E2E Ready" : "E2E Waiting for key");
                 } else {
-                    if (e2eBadgeText) e2eBadgeText.textContent = "E2E Pending";
+                    setE2eBadge(isRoomKeyOwner ? "E2E Setup Failed" : "E2E Pending");
                 }
             }
 
@@ -471,7 +524,6 @@
                 if (!IS_ENCRYPTED || !roomKey) return;
                 const items = messages.querySelectorAll('li[data-is-encrypted="true"]');
                 for (const item of items) {
-                    if (item.dataset.decryptFailed === "true") continue;
                     const bodyEl = item.querySelector(".message-body");
                     if (!bodyEl) continue;
                     const cipher = bodyEl.dataset.cipher || bodyEl.textContent.trim();
@@ -481,6 +533,8 @@
                         bodyEl.dataset.cipher = cipher;
                         if (plain === "[Unable to decrypt]") {
                             item.dataset.decryptFailed = "true";
+                        } else {
+                            delete item.dataset.decryptFailed;
                         }
                     }
                 }
@@ -490,48 +544,23 @@
             // ---- Polling for 1-to-1 key exchange ----
             if (IS_ENCRYPTED) {
                 const e2ePollInterval = setInterval(async () => {
-                    if (!userKeys) return;
-
-                    const other = participants.find(p => p.id !== USER_ID);
-
-                    // Always re-verify the server key to detect overwrites
-                    const serverEncryptedKey = await getRoomKey();
-                    if (serverEncryptedKey) {
-                        try {
-                            const serverKey = await unwrapRoomKey(serverEncryptedKey, userKeys.privateKey);
-                            const serverKeyJwk = await crypto.subtle.exportKey("jwk", serverKey);
-                            if (!roomKey) {
-                                roomKey = serverKey;
-                                localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(serverKeyJwk));
-                                if (e2eBadgeText) e2eBadgeText.textContent = "E2E Ready";
-                                await decryptRenderedMessages();
-                            } else {
-                                const localKeyJwk = await crypto.subtle.exportKey("jwk", roomKey);
-                                if (JSON.stringify(serverKeyJwk) !== JSON.stringify(localKeyJwk)) {
-                                    roomKey = serverKey;
-                                    localStorage.setItem(LS_ROOM_KEY(ROOM_ID), JSON.stringify(serverKeyJwk));
-                                    await decryptRenderedMessages();
-                                }
-                            }
-                        } catch (e) {
-                            console.error("Failed to sync room key from server", e);
-                        }
+                    const serverKey = (!isRoomKeyOwner || !roomKey) ? await loadServerRoomKey() : null;
+                    if (serverKey && !(await roomKeysMatch(roomKey, serverKey))) {
+                        roomKey = serverKey;
+                        setE2eBadge("E2E Ready");
+                        await decryptRenderedMessages();
                     }
 
-                    // Share our key with all room members (overwrite to ensure convergence)
-                    if (roomKey) {
+                    if (isRoomKeyOwner && roomKey) {
                         try {
-                            for (const p of participants) {
-                                if (p.id === USER_ID) continue;
-                                const pubKey = await getUserPublicKey(p.id);
-                                if (pubKey) {
-                                    const wrapped = await wrapRoomKey(roomKey, pubKey);
-                                    await storeRoomKey(p.id, wrapped);
-                                }
-                            }
+                            const shared = await shareRoomKeyWithParticipants();
+                            setE2eBadge(shared ? "E2E Ready" : "E2E Waiting for key");
                         } catch (e) {
                             console.error("Failed to share room key", e);
+                            setE2eBadge("E2E Waiting for key");
                         }
+                    } else if (!roomKey) {
+                        setE2eBadge("E2E Pending");
                     }
                 }, 3000);
             }
@@ -582,6 +611,7 @@
                             ${escapeHtml(message.file_name)}
                         </a>`;
                     }
+                    const renderedBody = isEncrypted ? "[Encrypted]" : message.body;
                     item.innerHTML = `
                         <div class="flex items-center justify-between gap-3">
                             <strong class="text-sm font-semibold text-cyan-200">${escapeHtml(message.user_name || "Guest")}</strong>
@@ -590,9 +620,13 @@
                                 <span class="text-xs text-slate-500">${escapeHtml(message.created_at || "")}</span>
                             </span>
                         </div>
-                        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200 message-body">${escapeHtml(message.body)}</p>
+                        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200 message-body">${escapeHtml(renderedBody)}</p>
                         ${fileLink}
                     `;
+                    if (isEncrypted) {
+                        const bodyEl = item.querySelector(".message-body");
+                        bodyEl.dataset.cipher = message.body;
+                    }
                     if (isEncrypted && roomKey) {
                         (async () => {
                             const bodyEl = item.querySelector(".message-body");

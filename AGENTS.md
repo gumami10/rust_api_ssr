@@ -1,11 +1,11 @@
 # Agent Context: rust_api_ssr
 
 ## Project Type
-Rust Axum web app with SSR (Askama), REST API, SQLite (SQLx), and real-time WebSocket chat.
+Rust Axum web app with SSR (Askama), REST API, SQLite (SQLx), real-time WebSocket chat, and end-to-end encryption for 1-to-1 rooms.
 
 ## Architecture (handlers → services → models)
 - **Handlers** (`src/handlers/`): thin HTTP layer (api, views, auth, chat, health). Returns JSON or Askama templates.
-- **Services** (`src/services/`): business logic. `UserService` handles auth, password hashing (Argon2), duplicate email checks.
+- **Services** (`src/services/`): business logic. `UserService` handles auth, password hashing (Argon2), duplicate email checks. `ChatService` handles rooms, messages, encryption keys, unread counts.
 - **Models** (`src/models/`): data types and repository traits. `UserRepository` is async-trait based; `SqliteUserRepository` is the impl.
 - **State** (`AppState`): cloneable struct with `Arc<dyn UserRepository>`, `SqlitePool`, `broadcast::Sender<BroadcastEvent>`, and `RequestMetrics`.
 
@@ -14,14 +14,19 @@ Rust Axum web app with SSR (Askama), REST API, SQLite (SQLx), and real-time WebS
 |---------|------|
 | Router | `src/app.rs` |
 | Errors | `src/error.rs` (AppError → IntoResponse) |
-| Config | `src/config.rs` (BIND_ADDRESS, DATABASE_URL from env) |
-| Middleware | `src/middleware.rs` (latency logging) |
-| Chat logic | `src/handlers/chat.rs` (rooms, invites, WS, files) |
-| Auth | `src/handlers/auth.rs` (session cookies, login/logout) |
+| Config | `src/config.rs` (BIND_ADDRESS, DATABASE_URL, COOKIE_SECURE from env) |
+| Middleware | `src/middleware.rs` (latency logging, request metrics) |
+| Cache | `src/cache.rs` (Moka-based AppCache + CachedUserRepository decorator) |
+| Context | `src/context.rs` (QueryContext with bypass_cache flag) |
+| Chat logic | `src/handlers/chat.rs` (rooms, invites, WS, files, E2E API) |
+| Auth | `src/handlers/auth.rs` (session cookies, login/logout, CSRF, rate limiting) |
+| User views | `src/handlers/views.rs` (user CRUD pages with validation) |
+| API | `src/handlers/api.rs` (JSON REST endpoints for users) |
+| Health | `src/handlers/health.rs` (healthz, readyz probes) |
 | Tests | `tests/api_integration.rs`, `tests/ssr_integration.rs` |
 
 ## Database (SQLite, SQLx migrations)
-Tables: `users`, `sessions`, `chat_rooms`, `chat_room_members`, `chat_room_invites`, `chat_messages`, `chat_room_read_positions`.
+Tables: `users`, `sessions`, `chat_rooms`, `chat_room_members`, `chat_room_invites`, `chat_messages`, `chat_room_read_positions`, `user_public_keys`, `chat_room_keys`.
 General room ID = 1.
 
 ## Rules

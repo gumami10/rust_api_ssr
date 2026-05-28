@@ -110,6 +110,7 @@ impl ChatService {
                 rooms.id,
                 rooms.name,
                 rooms.kind = 'general' AS is_general,
+                rooms.created_by_user_id,
                 (SELECT COUNT(*) FROM chat_room_members members WHERE members.room_id = rooms.id) AS participant_count
             FROM chat_rooms rooms
             WHERE rooms.kind = 'general'
@@ -139,13 +140,17 @@ impl ChatService {
                 id: row.id,
                 name: row.name,
                 is_general: row.is_general,
+                created_by_user_id: row.created_by_user_id,
                 participant_count: row.participant_count,
                 unread_count: 0,
                 is_encrypted: !row.is_general && row.participant_count == 2,
             })
             .collect();
 
-        self.cache.accessible_rooms.insert(user_id, rooms.clone()).await;
+        self.cache
+            .accessible_rooms
+            .insert(user_id, rooms.clone())
+            .await;
         Ok(rooms)
     }
 
@@ -162,10 +167,13 @@ impl ChatService {
         }
 
         let base_rooms = self.get_accessible_rooms(ctx, user_id).await?;
-        let room = base_rooms.into_iter().find(|r| r.id == room_id).map(|mut room| {
-            room.is_active = true;
-            room
-        });
+        let room = base_rooms
+            .into_iter()
+            .find(|r| r.id == room_id)
+            .map(|mut room| {
+                room.is_active = true;
+                room
+            });
 
         self.cache
             .accessible_room
@@ -206,7 +214,10 @@ impl ChatService {
         .map_err(AppError::Database)?;
 
         let counts: HashMap<i64, i64> = rows.into_iter().collect();
-        self.cache.unread_counts.insert(user_id, counts.clone()).await;
+        self.cache
+            .unread_counts
+            .insert(user_id, counts.clone())
+            .await;
         Ok(counts)
     }
 
@@ -251,7 +262,10 @@ impl ChatService {
             })
             .collect();
 
-        self.cache.pending_invites.insert(user_id, views.clone()).await;
+        self.cache
+            .pending_invites
+            .insert(user_id, views.clone())
+            .await;
         Ok(views)
     }
 
@@ -275,10 +289,7 @@ impl ChatService {
         .map_err(AppError::Database)?;
 
         if let Some(ref file) = row {
-            self.cache
-                .chat_file
-                .insert(message_id, file.clone())
-                .await;
+            self.cache.chat_file.insert(message_id, file.clone()).await;
         }
 
         Ok(row)
@@ -294,7 +305,9 @@ impl ChatService {
     }
 
     pub async fn invalidate_accessible_room(&self, user_id: i64, room_id: i64) {
-        self.cache.invalidate_accessible_room(user_id, room_id).await;
+        self.cache
+            .invalidate_accessible_room(user_id, room_id)
+            .await;
     }
 
     pub async fn invalidate_all_unread_counts(&self) {
@@ -330,11 +343,7 @@ impl ChatService {
         Ok(row.map(|r| r.0))
     }
 
-    pub async fn store_public_key(
-        &self,
-        user_id: i64,
-        public_key: &str,
-    ) -> Result<(), AppError> {
+    pub async fn store_public_key(&self, user_id: i64, public_key: &str) -> Result<(), AppError> {
         sqlx::query(
             r#"
             INSERT INTO user_public_keys (user_id, public_key)
@@ -389,18 +398,34 @@ impl ChatService {
         Ok(())
     }
 
+    pub async fn is_room_member(
+        &self,
+        _ctx: QueryContext,
+        room_id: i64,
+        user_id: i64,
+    ) -> Result<bool, AppError> {
+        let row = sqlx::query_as::<_, (i64,)>(
+            "SELECT 1 FROM chat_room_members WHERE room_id = ? AND user_id = ?",
+        )
+        .bind(room_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+        Ok(row.is_some())
+    }
+
     pub async fn get_room_key_member_ids(
         &self,
         _ctx: QueryContext,
         room_id: i64,
     ) -> Result<Vec<i64>, AppError> {
-        let rows = sqlx::query_as::<_, (i64,)>(
-            "SELECT user_id FROM chat_room_keys WHERE room_id = ?",
-        )
-        .bind(room_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(AppError::Database)?;
+        let rows =
+            sqlx::query_as::<_, (i64,)>("SELECT user_id FROM chat_room_keys WHERE room_id = ?")
+                .bind(room_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(AppError::Database)?;
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 }
