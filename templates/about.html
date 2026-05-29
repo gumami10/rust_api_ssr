@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+
+{% block title %}About{% endblock %}
+
+{% block content %}
+<section class="space-y-6">
+    <div class="rounded-3xl border border-white/10 bg-gradient-to-br from-slate-900/80 to-slate-900/40 p-8 shadow-glow shadow-slate-950/40 backdrop-blur">
+        <p class="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300/80">Documentation</p>
+        <h1 class="mt-3 text-4xl font-black tracking-tight text-white">About This Project</h1>
+        <p class="mt-4 max-w-2xl text-lg text-slate-400">
+            Project overview, architecture, and security documentation for rust_api_ssr.
+        </p>
+    </div>
+
+    <div class="flex gap-2">
+        <button id="tab-about" onclick="switchTab('about')" class="tab-btn active inline-flex items-center rounded-full border border-cyan-400/40 bg-cyan-400/10 px-5 py-2.5 text-sm font-semibold text-cyan-200 transition">
+            About
+        </button>
+        <button id="tab-encryption" onclick="switchTab('encryption')" class="tab-btn inline-flex items-center rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-slate-300 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-white">
+            E2E Encryption
+        </button>
+    </div>
+
+    <div id="panel-about" class="tab-panel space-y-6">
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">rust_api_ssr</h2>
+            <p class="mt-3 text-slate-400">A Rust API and server-side rendered (SSR) web application built for fast response times and low operational overhead. It serves a JSON REST API, HTML pages, and a real-time WebSocket chat from a single service.</p>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Goals</h2>
+            <ul class="mt-4 space-y-2 text-slate-400">
+                <li class="flex items-start gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400/60"></span>Keep request handling lightweight and predictable.</li>
+                <li class="flex items-start gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400/60"></span>Serve JSON API responses and server-rendered HTML from one Rust service.</li>
+                <li class="flex items-start gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400/60"></span>Use compile-time checked templates instead of runtime template parsing.</li>
+                <li class="flex items-start gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400/60"></span>Keep shared application state cheap to clone through <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">Arc</code>.</li>
+                <li class="flex items-start gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400/60"></span>Log per-request latency for quick feedback while tuning performance.</li>
+            </ul>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Tech Stack</h2>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">Rust 2021</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">Tokio</span><span class="ml-2 text-sm text-slate-400">async runtime</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">Axum</span><span class="ml-2 text-sm text-slate-400">HTTP + WebSocket</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">Askama</span><span class="ml-2 text-sm text-slate-400">compile-time templates</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">SQLx</span><span class="ml-2 text-sm text-slate-400">SQLite, checked queries</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">Serde</span><span class="ml-2 text-sm text-slate-400">serialization</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">Argon2</span><span class="ml-2 text-sm text-slate-400">password hashing</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">Tracing</span><span class="ml-2 text-sm text-slate-400">JSON logs</span></div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4"><span class="font-semibold text-white">thiserror</span><span class="ml-2 text-sm text-slate-400">error handling</span></div>
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Architecture</h2>
+            <p class="mt-2 text-slate-400">The codebase follows a layered architecture:</p>
+            <div class="mt-6 space-y-3">
+                <div class="rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-5">
+                    <h3 class="text-lg font-semibold text-cyan-100">Handlers <span class="text-sm font-normal text-cyan-300/60">src/handlers/</span></h3>
+                    <ul class="mt-2 space-y-1 pl-4 text-sm text-slate-400">
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">api.rs</code> &mdash; JSON REST API endpoints</li>
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">views.rs</code> &mdash; SSR HTML page endpoints (users CRUD)</li>
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">auth.rs</code> &mdash; Session-based login/logout</li>
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">chat.rs</code> &mdash; Chat rooms, invites, WebSocket handler</li>
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">health.rs</code> &mdash; Health (/healthz) and readiness (/readyz)</li>
+                    </ul>
+                </div>
+                <div class="rounded-2xl border border-indigo-400/20 bg-indigo-400/5 p-5">
+                    <h3 class="text-lg font-semibold text-indigo-100">Services <span class="text-sm font-normal text-indigo-300/60">src/services/</span></h3>
+                    <ul class="mt-2 space-y-1 pl-4 text-sm text-slate-400">
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">users.rs</code> &mdash; Business logic, password hashing, auth</li>
+                    </ul>
+                </div>
+                <div class="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-5">
+                    <h3 class="text-lg font-semibold text-emerald-100">Models / Repositories <span class="text-sm font-normal text-emerald-300/60">src/models/</span></h3>
+                    <ul class="mt-2 space-y-1 pl-4 text-sm text-slate-400">
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-emerald-300">user.rs</code> &mdash; User struct, UserRepository trait, SqliteUserRepository impl</li>
+                    </ul>
+                </div>
+                <div class="rounded-2xl border border-rose-400/20 bg-rose-400/5 p-5">
+                    <h3 class="text-lg font-semibold text-rose-100">Infrastructure</h3>
+                    <ul class="mt-2 space-y-1 pl-4 text-sm text-slate-400">
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-rose-300">app.rs</code> &mdash; Router construction</li>
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-rose-300">error.rs</code> &mdash; AppError enum and IntoResponse mapping</li>
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-rose-300">middleware.rs</code> &mdash; Request latency logging</li>
+                        <li><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-rose-300">config.rs</code> &mdash; Environment-based configuration</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Key Design Decisions</h2>
+            <div class="mt-4 space-y-4">
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">AppState is cloneable</h3>
+                    <p class="mt-1 text-sm text-slate-400">All shared state lives behind <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">Arc</code> or cheap clone types so Axum can clone it per request without performance issues.</p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">Repository trait</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">UserRepository</code> is a trait with an async implementation (<code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">SqliteUserRepository</code>). This makes tests easy to inject and keeps handlers decoupled from SQLx directly.</p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">Service layer</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">UserService</code> contains business rules (duplicate email checks, password hashing, authentication). Handlers delegate to services, not repositories directly.</p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">Error handling</h3>
+                    <p class="mt-1 text-sm text-slate-400">A single <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">AppError</code> enum covers database, not-found, conflict, and internal errors. It implements <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">IntoResponse</code> so handlers can use <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">?</code> propagation.</p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">Templates</h3>
+                    <p class="mt-1 text-sm text-slate-400">Askama compiles HTML templates at build time. Runtime rendering is fast and many template errors are caught by <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">cargo check</code>.</p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">Latency middleware</h3>
+                    <p class="mt-1 text-sm text-slate-400">Every request is timed and logged via tracing (JSON). The last 8 request metrics are stored in a small in-memory ring buffer and displayed in the UI footer.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Features</h2>
+
+            <div class="mt-6 space-y-6">
+                <div>
+                    <h3 class="text-lg font-semibold text-cyan-100">Users</h3>
+                    <div class="mt-3 overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead><tr class="border-b border-white/10 text-slate-400"><th class="pb-2 pr-4 font-medium">Method</th><th class="pb-2 pr-4 font-medium">Path</th><th class="pb-2 font-medium">Description</th></tr></thead>
+                            <tbody class="text-slate-300">
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/users</td><td class="py-2">SSR users list</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/users/:id</td><td class="py-2">SSR user profile</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/users/new</td><td class="py-2">SSR new user form</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-cyan-400/15 px-2 py-0.5 text-xs font-semibold text-cyan-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/users</td><td class="py-2">Create user</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/users/:id/edit</td><td class="py-2">SSR edit form</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-cyan-400/15 px-2 py-0.5 text-xs font-semibold text-cyan-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/users/:id</td><td class="py-2">Update user</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-rose-400/15 px-2 py-0.5 text-xs font-semibold text-rose-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/users/:id/delete</td><td class="py-2">Delete user</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/api/users</td><td class="py-2">JSON list all users</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/api/users/:id</td><td class="py-2">JSON get one user</td></tr>
+                                <tr><td class="py-2 pr-4"><span class="rounded bg-rose-400/15 px-2 py-0.5 text-xs font-semibold text-rose-300">DELETE</span></td><td class="py-2 pr-4 font-mono text-xs">/api/users/:id</td><td class="py-2">Delete user (API)</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 class="text-lg font-semibold text-indigo-100">Authentication</h3>
+                    <div class="mt-3 overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead><tr class="border-b border-white/10 text-slate-400"><th class="pb-2 pr-4 font-medium">Method</th><th class="pb-2 pr-4 font-medium">Path</th><th class="pb-2 font-medium">Description</th></tr></thead>
+                            <tbody class="text-slate-300">
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/login</td><td class="py-2">Login form</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-cyan-400/15 px-2 py-0.5 text-xs font-semibold text-cyan-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/login</td><td class="py-2">Authenticate (Argon2)</td></tr>
+                                <tr><td class="py-2 pr-4"><span class="rounded bg-cyan-400/15 px-2 py-0.5 text-xs font-semibold text-cyan-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/logout</td><td class="py-2">Invalidate session</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="mt-3 text-sm text-slate-400">Session cookies: <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">chat_session</code> token stored in SQLite, HttpOnly, SameSite=Lax. Creating a user automatically logs them in.</p>
+                </div>
+
+                <div>
+                    <h3 class="text-lg font-semibold text-emerald-100">Chat</h3>
+                    <div class="mt-3 overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead><tr class="border-b border-white/10 text-slate-400"><th class="pb-2 pr-4 font-medium">Method</th><th class="pb-2 pr-4 font-medium">Path</th><th class="pb-2 font-medium">Description</th></tr></thead>
+                            <tbody class="text-slate-300">
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/chat</td><td class="py-2">General chat room</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/chat/rooms/:id</td><td class="py-2">Private room</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-cyan-400/15 px-2 py-0.5 text-xs font-semibold text-cyan-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/chat/rooms</td><td class="py-2">Create private room</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-cyan-400/15 px-2 py-0.5 text-xs font-semibold text-cyan-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/chat/rooms/:id/invites</td><td class="py-2">Invite user</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-cyan-400/15 px-2 py-0.5 text-xs font-semibold text-cyan-300">POST</span></td><td class="py-2 pr-4 font-mono text-xs">/chat/invites/:id/accept</td><td class="py-2">Accept invite</td></tr>
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/chat/ws?room_id=...</td><td class="py-2">WebSocket endpoint</td></tr>
+                                <tr><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/chat/files/:message_id</td><td class="py-2">File attachments</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                        <div class="rounded-2xl border border-white/5 bg-white/5 p-3 text-sm text-slate-400">Real-time messaging via WebSocket + broadcast</div>
+                        <div class="rounded-2xl border border-white/5 bg-white/5 p-3 text-sm text-slate-400">Typing indicators (2-second debounce)</div>
+                        <div class="rounded-2xl border border-white/5 bg-white/5 p-3 text-sm text-slate-400">File sharing (base64 over WS, BLOB in SQLite)</div>
+                        <div class="rounded-2xl border border-white/5 bg-white/5 p-3 text-sm text-slate-400">Unread message badges per room</div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 class="text-lg font-semibold text-rose-100">Health</h3>
+                    <div class="mt-3 overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead><tr class="border-b border-white/10 text-slate-400"><th class="pb-2 pr-4 font-medium">Method</th><th class="pb-2 pr-4 font-medium">Path</th><th class="pb-2 font-medium">Description</th></tr></thead>
+                            <tbody class="text-slate-300">
+                                <tr class="border-b border-white/5"><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/healthz</td><td class="py-2">Liveness probe (204)</td></tr>
+                                <tr><td class="py-2 pr-4"><span class="rounded bg-emerald-400/15 px-2 py-0.5 text-xs font-semibold text-emerald-300">GET</span></td><td class="py-2 pr-4 font-mono text-xs">/readyz</td><td class="py-2">Readiness probe (queries DB)</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Database Schema</h2>
+            <p class="mt-2 text-slate-400">Managed via SQLx migrations:</p>
+            <div class="mt-4 space-y-3">
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">users</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">name</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">email</code> (unique), <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">password_hash</code></p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">sessions</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">token</code> (PK), <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">user_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">created_at</code></p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">chat_rooms</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">name</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">kind</code> (general/private), <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">created_by_user_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">created_at</code></p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">chat_room_members</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">room_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">user_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">joined_at</code></p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">chat_room_invites</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">room_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">invited_user_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">invited_by_user_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">status</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">created_at</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">accepted_at</code></p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">chat_messages</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">room_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">user_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">body</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">created_at</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">kind</code> (user/notification), <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">file_name</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">file_data</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">file_content_type</code></p>
+                </div>
+                <div class="rounded-2xl border border-white/5 bg-white/5 p-4">
+                    <h3 class="font-semibold text-white">chat_room_read_positions</h3>
+                    <p class="mt-1 text-sm text-slate-400"><code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">room_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">user_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">last_read_message_id</code>, <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">updated_at</code></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Environment Variables</h2>
+            <div class="mt-4 overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead><tr class="border-b border-white/10 text-slate-400"><th class="pb-2 pr-4 font-medium">Variable</th><th class="pb-2 pr-4 font-medium">Default</th><th class="pb-2 font-medium">Description</th></tr></thead>
+                    <tbody class="text-slate-300">
+                        <tr class="border-b border-white/5"><td class="py-2 pr-4 font-mono text-xs text-cyan-300">BIND_ADDRESS</td><td class="py-2 pr-4 font-mono text-xs">0.0.0.0:3000</td><td class="py-2">Server bind address</td></tr>
+                        <tr class="border-b border-white/5"><td class="py-2 pr-4 font-mono text-xs text-cyan-300">DATABASE_URL</td><td class="py-2 pr-4 font-mono text-xs">sqlite://data.db</td><td class="py-2">SQLite database URL</td></tr>
+                        <tr><td class="py-2 pr-4 font-mono text-xs text-cyan-300">RUST_LOG</td><td class="py-2 pr-4 font-mono text-xs">rust_api_ssr=info,axum=warn</td><td class="py-2">Tracing log filter</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+            <h2 class="text-2xl font-bold text-white">Running the Project</h2>
+            <div class="mt-4 space-y-4">
+                <div>
+                    <h3 class="font-semibold text-white">Development</h3>
+                    <div class="mt-2 rounded-2xl border border-white/5 bg-slate-950/60 p-4">
+                        <code class="text-sm text-emerald-300">cargo run</code>
+                    </div>
+                    <p class="mt-2 text-sm text-slate-400">Server listens on <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">http://127.0.0.1:3000</code> by default.</p>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-white">Docker</h3>
+                    <div class="mt-2 rounded-2xl border border-white/5 bg-slate-950/60 p-4">
+                        <code class="text-sm text-emerald-300">docker compose up --build</code>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-white">Testing</h3>
+                    <div class="mt-2 rounded-2xl border border-white/5 bg-slate-950/60 p-4">
+                        <code class="text-sm text-emerald-300">cargo test</code>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="panel-encryption" class="tab-panel hidden space-y-6">
+        {% include "encryption/_content.html" %}
+    </div>
+</section>
+
+<script>
+function switchTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.add('hidden'); });
+    document.querySelectorAll('.tab-btn').forEach(function(b) {
+        b.classList.remove('active', 'border-cyan-400/40', 'bg-cyan-400/10', 'text-cyan-200', 'font-semibold');
+        b.classList.add('border-white/10', 'bg-white/5', 'text-slate-300', 'font-medium');
+    });
+    document.getElementById('panel-' + name).classList.remove('hidden');
+    var btn = document.getElementById('tab-' + name);
+    btn.classList.add('active', 'border-cyan-400/40', 'bg-cyan-400/10', 'text-cyan-200', 'font-semibold');
+    btn.classList.remove('border-white/10', 'bg-white/5', 'text-slate-300', 'font-medium');
+}
+</script>
+{% endblock %}

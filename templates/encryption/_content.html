@@ -1,0 +1,261 @@
+<section class="space-y-8">
+    <div class="rounded-3xl border border-white/10 bg-gradient-to-br from-slate-900/80 to-slate-900/40 p-8 shadow-glow shadow-slate-950/40 backdrop-blur">
+        <p class="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300/80">Security</p>
+        <h1 class="mt-3 text-4xl font-black tracking-tight text-white">How End-to-End Encryption Works</h1>
+        <p class="mt-4 max-w-2xl text-lg text-slate-400">
+            A visual guide to how Alice and Bob exchange encrypted messages through our chat, using hybrid cryptography. The server never sees plaintext.
+        </p>
+    </div>
+
+    <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+        <h2 class="text-2xl font-bold text-white">The Full Flow</h2>
+        <p class="mt-2 text-slate-400">From key generation to encrypted message delivery.</p>
+
+        <div class="mt-8 overflow-x-auto">
+            <svg viewBox="0 0 900 720" xmlns="http://www.w3.org/2000/svg" class="mx-auto w-full max-w-4xl" style="min-width:600px">
+                <defs>
+                    <linearGradient id="aliceGrad" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%" stop-color="#22d3ee"/>
+                        <stop offset="100%" stop-color="#818cf8"/>
+                    </linearGradient>
+                    <linearGradient id="bobGrad" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%" stop-color="#34d399"/>
+                        <stop offset="100%" stop-color="#22d3ee"/>
+                    </linearGradient>
+                    <linearGradient id="serverGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#6366f1"/>
+                        <stop offset="100%" stop-color="#4f46e5"/>
+                    </linearGradient>
+                    <linearGradient id="arrowGrad" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stop-color="#22d3ee"/>
+                        <stop offset="100%" stop-color="#34d399"/>
+                    </linearGradient>
+                    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#22d3ee"/>
+                    </marker>
+                    <marker id="arrowEmerald" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#34d399"/>
+                    </marker>
+                    <marker id="arrowIndigo" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#818cf8"/>
+                    </marker>
+                    <marker id="arrowRose" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#fb7185"/>
+                    </marker>
+                </defs>
+
+                <rect x="60" y="30" width="140" height="60" rx="16" fill="url(#aliceGrad)" opacity="0.9"/>
+                <text x="130" y="56" text-anchor="middle" font-size="15" font-weight="800" fill="#0f172a">Alice</text>
+                <text x="130" y="74" text-anchor="middle" font-size="10" fill="#0f172a" opacity="0.7">Sender</text>
+
+                <rect x="380" y="30" width="140" height="60" rx="16" fill="url(#serverGrad)" opacity="0.9"/>
+                <text x="450" y="56" text-anchor="middle" font-size="15" font-weight="800" fill="#e0e7ff">Server</text>
+                <text x="450" y="74" text-anchor="middle" font-size="10" fill="#c7d2fe" opacity="0.7">Relay only</text>
+
+                <rect x="700" y="30" width="140" height="60" rx="16" fill="url(#bobGrad)" opacity="0.9"/>
+                <text x="770" y="56" text-anchor="middle" font-size="15" font-weight="800" fill="#0f172a">Bob</text>
+                <text x="770" y="74" text-anchor="middle" font-size="10" fill="#0f172a" opacity="0.7">Receiver</text>
+
+                <line x1="130" y1="90" x2="130" y2="700" stroke="#22d3ee" stroke-width="2" stroke-dasharray="6 4" opacity="0.3"/>
+                <line x1="450" y1="90" x2="450" y2="700" stroke="#818cf8" stroke-width="2" stroke-dasharray="6 4" opacity="0.3"/>
+                <line x1="770" y1="90" x2="770" y2="700" stroke="#34d399" stroke-width="2" stroke-dasharray="6 4" opacity="0.3"/>
+
+                <text x="30" y="128" font-size="11" font-weight="700" fill="#22d3ee" opacity="0.6">STEP 1</text>
+                <rect x="60" y="115" width="140" height="36" rx="10" fill="#22d3ee" opacity="0.12" stroke="#22d3ee" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="130" y="137" text-anchor="middle" font-size="11" fill="#67e8f9">Generate RSA key pair</text>
+
+                <text x="690" y="128" font-size="11" font-weight="700" fill="#34d399" opacity="0.6">STEP 1</text>
+                <rect x="700" y="115" width="140" height="36" rx="10" fill="#34d399" opacity="0.12" stroke="#34d399" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="770" y="137" text-anchor="middle" font-size="11" fill="#6ee7b7">Generate RSA key pair</text>
+
+                <text x="350" y="185" font-size="11" font-weight="700" fill="#818cf8" opacity="0.6">STEP 2</text>
+                <line x1="195" y1="175" x2="385" y2="175" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowCyan)"/>
+                <text x="290" y="168" text-anchor="middle" font-size="10" fill="#67e8f9">Upload public key</text>
+
+                <line x1="705" y1="195" x2="515" y2="195" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowEmerald)"/>
+                <text x="610" y="188" text-anchor="middle" font-size="10" fill="#6ee7b7">Upload public key</text>
+                <text x="350" y="208" font-size="11" font-weight="700" fill="#818cf8" opacity="0.6">STEP 2</text>
+
+                <rect x="370" y="215" width="160" height="30" rx="8" fill="#6366f1" opacity="0.15" stroke="#818cf8" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="450" y="234" text-anchor="middle" font-size="10" fill="#c7d2fe">Stores public keys (DB)</text>
+
+                <text x="350" y="278" font-size="11" font-weight="700" fill="#22d3ee" opacity="0.6">STEP 3</text>
+                <line x1="385" y1="268" x2="195" y2="268" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arrowIndigo)"/>
+                <text x="290" y="261" text-anchor="middle" font-size="10" fill="#c7d2fe">Fetch Bob's public key</text>
+
+                <text x="350" y="318" font-size="11" font-weight="700" fill="#22d3ee" opacity="0.6">STEP 4</text>
+                <rect x="60" y="300" width="140" height="46" rx="10" fill="#22d3ee" opacity="0.12" stroke="#22d3ee" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="130" y="320" text-anchor="middle" font-size="11" fill="#67e8f9">Generate AES room key</text>
+                <text x="130" y="336" text-anchor="middle" font-size="9" fill="#67e8f9" opacity="0.7">(AES-GCM 256-bit)</text>
+
+                <text x="350" y="378" font-size="11" font-weight="700" fill="#22d3ee" opacity="0.6">STEP 5</text>
+                <line x1="195" y1="370" x2="385" y2="370" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowCyan)"/>
+                <text x="290" y="363" text-anchor="middle" font-size="10" fill="#67e8f9">Room key encrypted w/ Bob's pub key</text>
+
+                <line x1="515" y1="390" x2="705" y2="390" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arrowIndigo)"/>
+                <text x="610" y="383" text-anchor="middle" font-size="10" fill="#c7d2fe">Deliver encrypted room key</text>
+                <text x="560" y="408" font-size="11" font-weight="700" fill="#818cf8" opacity="0.6">STEP 5</text>
+
+                <rect x="700" y="415" width="140" height="36" rx="10" fill="#34d399" opacity="0.12" stroke="#34d399" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="770" y="437" text-anchor="middle" font-size="11" fill="#6ee7b7">Decrypt room key (RSA)</text>
+                <text x="690" y="433" font-size="11" font-weight="700" fill="#34d399" opacity="0.6">STEP 6</text>
+
+                <rect x="30" y="480" width="840" height="2" rx="1" fill="#22d3ee" opacity="0.15"/>
+                <text x="450" y="505" text-anchor="middle" font-size="13" font-weight="800" fill="#f0abfc">Now both have the same AES room key - messaging begins!</text>
+
+                <text x="350" y="545" font-size="11" font-weight="700" fill="#22d3ee" opacity="0.6">STEP 7</text>
+                <rect x="60" y="530" width="140" height="46" rx="10" fill="#22d3ee" opacity="0.12" stroke="#22d3ee" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="130" y="550" text-anchor="middle" font-size="11" fill="#67e8f9">Encrypt message</text>
+                <text x="130" y="566" text-anchor="middle" font-size="9" fill="#67e8f9" opacity="0.7">AES-GCM + random IV</text>
+
+                <line x1="195" y1="595" x2="385" y2="595" stroke="#fb7185" stroke-width="2" marker-end="url(#arrowRose)"/>
+                <text x="290" y="588" text-anchor="middle" font-size="10" fill="#fda4af">Send ciphertext</text>
+                <text x="350" y="613" font-size="11" font-weight="700" fill="#fb7185" opacity="0.6">STEP 8</text>
+
+                <rect x="370" y="615" width="160" height="30" rx="8" fill="#fb7185" opacity="0.1" stroke="#fb7185" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="450" y="634" text-anchor="middle" font-size="10" fill="#fda4af">Stores ciphertext only</text>
+
+                <line x1="515" y1="655" x2="705" y2="655" stroke="#fb7185" stroke-width="2" marker-end="url(#arrowRose)"/>
+                <text x="610" y="648" text-anchor="middle" font-size="10" fill="#fda4af">Deliver ciphertext via WebSocket</text>
+                <text x="560" y="673" font-size="11" font-weight="700" fill="#fb7185" opacity="0.6">STEP 9</text>
+
+                <rect x="700" y="675" width="140" height="36" rx="10" fill="#34d399" opacity="0.12" stroke="#34d399" stroke-width="1" stroke-opacity="0.3"/>
+                <text x="770" y="697" text-anchor="middle" font-size="11" fill="#6ee7b7">Decrypt with room key</text>
+                <text x="690" y="693" font-size="11" font-weight="700" fill="#34d399" opacity="0.6">STEP 10</text>
+            </svg>
+        </div>
+    </div>
+
+    <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur">
+            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-400/15 text-2xl">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-cyan-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            </div>
+            <h3 class="mt-4 text-lg font-bold text-white">RSA-OAEP 2048-bit</h3>
+            <p class="mt-2 text-sm text-slate-400">Each user generates an asymmetric key pair in their browser. The private key never leaves the device. The public key is uploaded to the server for others to fetch.</p>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur">
+            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-400/15 text-2xl">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-emerald-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            </div>
+            <h3 class="mt-4 text-lg font-bold text-white">AES-GCM 256-bit</h3>
+            <p class="mt-2 text-sm text-slate-400">A symmetric room key encrypts all messages. Each encryption uses a fresh 96-bit IV, ensuring identical messages produce different ciphertext.</p>
+        </div>
+
+        <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur">
+            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-400/15 text-2xl">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-indigo-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            </div>
+            <h3 class="mt-4 text-lg font-bold text-white">Server Sees Nothing</h3>
+            <p class="mt-2 text-sm text-slate-400">The server only stores encrypted room keys and ciphertext. It cannot read messages because it never has the room key in plaintext.</p>
+        </div>
+    </div>
+
+    <div class="rounded-3xl border border-white/10 bg-slate-900/75 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+        <h2 class="text-2xl font-bold text-white">Step-by-Step Breakdown</h2>
+
+        <div class="mt-6 space-y-6">
+            <div class="rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-400/20 text-sm font-bold text-cyan-300">1</span>
+                    <h3 class="text-lg font-semibold text-cyan-100">Key Pair Generation</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Alice and Bob each generate an RSA-OAEP 2048-bit key pair in their browser using the Web Crypto API. The private key is stored in <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-cyan-300">localStorage</code> and never sent to the server.</p>
+            </div>
+
+            <div class="rounded-2xl border border-indigo-400/20 bg-indigo-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-400/20 text-sm font-bold text-indigo-300">2</span>
+                    <h3 class="text-lg font-semibold text-indigo-100">Public Key Upload</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Both upload their public keys to the server via <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">POST /api/crypto/public-key</code>. The server stores them in the <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">user_public_keys</code> table.</p>
+            </div>
+
+            <div class="rounded-2xl border border-indigo-400/20 bg-indigo-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-400/20 text-sm font-bold text-indigo-300">3</span>
+                    <h3 class="text-lg font-semibold text-indigo-100">Fetch Recipient's Public Key</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Alice fetches Bob's public key via <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">GET /api/crypto/public-key/:userId</code> so she can securely share the room key with him.</p>
+            </div>
+
+            <div class="rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-400/20 text-sm font-bold text-cyan-300">4</span>
+                    <h3 class="text-lg font-semibold text-cyan-100">Room Key Generation</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Alice generates a symmetric AES-GCM 256-bit room key in her browser. This key will encrypt all messages in the room.</p>
+            </div>
+
+            <div class="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/20 text-sm font-bold text-emerald-300">5</span>
+                    <h3 class="text-lg font-semibold text-emerald-100">Room Key Distribution</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Alice encrypts (wraps) the room key with Bob's public key using RSA-OAEP and uploads it to the server. The server stores it in <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-emerald-300">chat_room_keys</code>. Only Bob can unwrap it.</p>
+            </div>
+
+            <div class="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/20 text-sm font-bold text-emerald-300">6</span>
+                    <h3 class="text-lg font-semibold text-emerald-100">Bob Decrypts the Room Key</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Bob fetches the encrypted room key and decrypts it with his private key (RSA-OAEP). Now both Alice and Bob share the same AES room key.</p>
+            </div>
+
+            <div class="rounded-2xl border border-rose-400/20 bg-rose-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-rose-400/20 text-sm font-bold text-rose-300">7</span>
+                    <h3 class="text-lg font-semibold text-rose-100">Message Encryption</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Alice encrypts her message with the AES room key. A fresh 96-bit IV is generated for each message. The output is <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-rose-300">IV + ciphertext</code>, base64-encoded.</p>
+            </div>
+
+            <div class="rounded-2xl border border-rose-400/20 bg-rose-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-rose-400/20 text-sm font-bold text-rose-300">8-9</span>
+                    <h3 class="text-lg font-semibold text-rose-100">Ciphertext Relay</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">The ciphertext is sent to the server, which stores it (with <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-rose-300">is_encrypted = 1</code>) and relays it to Bob via WebSocket. The server cannot read it.</p>
+            </div>
+
+            <div class="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-5">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/20 text-sm font-bold text-emerald-300">10</span>
+                    <h3 class="text-lg font-semibold text-emerald-100">Message Decryption</h3>
+                </div>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Bob extracts the IV from the first 12 bytes, then decrypts the ciphertext with the shared AES room key. The plaintext message is displayed.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="rounded-3xl border border-amber-400/20 bg-amber-400/5 p-6 shadow-glow shadow-slate-950/40 backdrop-blur sm:p-8">
+        <div class="flex items-start gap-4">
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-400/15">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+            </div>
+            <div>
+                <h3 class="text-lg font-bold text-amber-100">Important Notes</h3>
+                <ul class="mt-3 space-y-2 text-sm text-slate-400">
+                    <li class="flex items-start gap-2">
+                        <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400/60"></span>
+                        E2E encryption is only active for <strong class="text-amber-200">1-to-1 private rooms</strong> (exactly 2 participants).
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400/60"></span>
+                        All cryptographic operations happen <strong class="text-amber-200">in the browser</strong> using the Web Crypto API.
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400/60"></span>
+                        Private keys are stored in <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-amber-300">localStorage</code> and never transmitted.
+                    </li>
+                    <li class="flex items-start gap-2">
+                        <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400/60"></span>
+                        Clearing browser data will delete local keys, making old encrypted messages unrecoverable.
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>

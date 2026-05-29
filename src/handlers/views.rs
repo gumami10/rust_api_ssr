@@ -52,6 +52,20 @@ struct PerfTemplate {
     request_metrics_all: Vec<RequestMetric>,
 }
 
+#[derive(Template)]
+#[template(path = "encryption.html")]
+struct EncryptionTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
+}
+
+#[derive(Template)]
+#[template(path = "about.html")]
+struct AboutTemplate {
+    viewer: Option<User>,
+    request_metrics: Vec<RequestMetric>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UserForm {
     name: String,
@@ -367,6 +381,38 @@ pub async fn render_perf(
             viewer,
             request_metrics,
             request_metrics_all,
+        },
+        StatusCode::OK,
+    )
+}
+
+pub async fn render_encryption(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
+    let request_metrics = state.request_metrics.recent();
+    render_template(
+        EncryptionTemplate {
+            viewer,
+            request_metrics,
+        },
+        StatusCode::OK,
+    )
+}
+
+pub async fn render_about(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let ctx = crate::handlers::query_context(&headers);
+    let viewer = auth::current_user(&state, &headers, ctx).await?;
+    let request_metrics = state.request_metrics.recent();
+    render_template(
+        AboutTemplate {
+            viewer,
+            request_metrics,
         },
         StatusCode::OK,
     )
