@@ -4,9 +4,11 @@ mod rooms;
 mod ws;
 
 pub use crypto::{
-    get_public_key_handler, get_room_key_handler, get_room_key_members_handler,
-    store_public_key_handler, store_room_key_handler, RoomKeyMembersResponse, RoomKeyResponse,
-    StorePublicKeyInput, StoreRoomKeyInput, PublicKeyResponse,
+    delete_device_handler, get_public_key_handler, get_room_key_handler,
+    get_room_key_members_handler, list_devices_handler, register_device_handler,
+    store_public_key_handler, store_room_key_handler, DeviceResponse, DevicesResponse,
+    PublicDeviceKey, PublicKeyResponse, RegisterDeviceInput, RoomDeviceKeyResponse,
+    RoomKeyMembersResponse, RoomKeyResponse, StorePublicKeyInput, StoreRoomKeyInput,
 };
 pub use messages::serve_file;
 pub use rooms::{accept_invite, create_chat_room, invite_to_room, render_chat, render_chat_room};

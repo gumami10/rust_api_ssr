@@ -270,6 +270,7 @@
 
             const LS_PRIVATE_KEY = "e2e_private_key";
             const LS_PUBLIC_KEY = "e2e_public_key";
+            const LS_DEVICE_ID = "e2e_device_id";
             const LS_ROOM_KEY = (id) => `e2e_room_key_${id}`;
             const participants = {{ participants_json|safe }};
 
@@ -291,51 +292,84 @@
                 return { privateKey, publicKey };
             }
 
-            async function uploadPublicKey(publicKeyJwk) {
+            function getOrCreateDeviceId() {
+                let deviceId = localStorage.getItem(LS_DEVICE_ID);
+                if (!deviceId) {
+                    deviceId = crypto.randomUUID();
+                    localStorage.setItem(LS_DEVICE_ID, deviceId);
+                }
+                return deviceId;
+            }
+
+            async function registerDevice(publicKeyJwk) {
                 try {
-                    await fetch("/api/crypto/public-key", {
+                    const deviceId = getOrCreateDeviceId();
+                    const deviceName = navigator.userAgent ? navigator.userAgent.slice(0, 180) : "Browser";
+                    const res = await fetch("/api/crypto/devices", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ public_key: JSON.stringify(publicKeyJwk) }),
+                        body: JSON.stringify({
+                            device_id: deviceId,
+                            device_name: deviceName,
+                            public_key: JSON.stringify(publicKeyJwk),
+                        }),
                     });
+                    if (!res.ok) {
+                        console.error("registerDevice failed with status", res.status);
+                    }
+                    return res.ok;
                 } catch (e) {
-                    console.error("Failed to upload public key", e);
+                    console.error("Failed to register device", e);
+                    return false;
                 }
             }
 
-            async function getUserPublicKey(userId) {
+            async function getUserDevices(userId) {
                 try {
                     const res = await fetch(`/api/crypto/public-key/${userId}`);
-                    if (!res.ok) return null;
+                    if (!res.ok) return [];
                     const data = await res.json();
-                    return data.public_key ? JSON.parse(data.public_key) : null;
+                    if (Array.isArray(data.devices)) {
+                        return data.devices.map((device) => ({
+                            device_id: device.device_id,
+                            public_key: JSON.parse(device.public_key),
+                        }));
+                    }
+                    return data.public_key
+                        ? [{ device_id: "legacy", public_key: JSON.parse(data.public_key) }]
+                        : [];
                 } catch (e) {
-                    console.error("Failed to fetch public key for user", userId, e);
-                    return null;
+                    console.error("Failed to fetch devices for user", userId, e);
+                    return [];
                 }
             }
 
-            async function getRoomKey() {
+            async function getRoomKeys() {
                 try {
                     const res = await fetch(`/api/crypto/room-key/${ROOM_ID}`);
-                    if (!res.ok) return null;
+                    if (!res.ok) return [];
                     const data = await res.json();
-                    return data.encrypted_key || null;
+                    if (Array.isArray(data.keys)) {
+                        return data.keys;
+                    }
+                    return data.encrypted_key
+                        ? [{ device_id: "legacy", encrypted_key: data.encrypted_key }]
+                        : [];
                 } catch (e) {
                     console.error("Failed to fetch room key", e);
-                    return null;
+                    return [];
                 }
             }
 
-            async function storeRoomKey(userId, encryptedKeyBase64) {
+            async function storeRoomKey(userId, deviceId, encryptedKeyBase64) {
                 try {
                     const res = await fetch(`/api/crypto/room-key/${ROOM_ID}`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ user_id: userId, encrypted_key: encryptedKeyBase64 }),
+                        body: JSON.stringify({ user_id: userId, device_id: deviceId, encrypted_key: encryptedKeyBase64 }),
                     });
                     if (!res.ok) {
-                        console.error("storeRoomKey failed with status", res.status, "for user", userId);
+                        console.error("storeRoomKey failed with status", res.status, "for user", userId, "device", deviceId);
                     }
                     return res.ok;
                 } catch (e) {
@@ -415,9 +449,11 @@
 
             let roomKey = null;
             let userKeys = null;
+            let currentDeviceId = null;
             if (window.crypto && crypto.subtle) {
                 userKeys = await getOrCreateUserKeys();
-                await uploadPublicKey(userKeys.publicKey);
+                currentDeviceId = getOrCreateDeviceId();
+                await registerDevice(userKeys.publicKey);
             }
 
             const isRoomKeyOwner = IS_ENCRYPTED && ROOM_KEY_OWNER_ID === USER_ID;
@@ -444,10 +480,11 @@
             }
 
             async function loadServerRoomKey() {
-                const encryptedRoomKey = await getRoomKey();
-                if (!encryptedRoomKey) return null;
+                const encryptedRoomKeys = await getRoomKeys();
+                const currentDeviceKey = encryptedRoomKeys.find((key) => key.device_id === currentDeviceId);
+                if (!currentDeviceKey) return null;
                 try {
-                    const key = await unwrapRoomKey(encryptedRoomKey, userKeys.privateKey);
+                    const key = await unwrapRoomKey(currentDeviceKey.encrypted_key, userKeys.privateKey);
                     await persistRoomKeyLocally(key);
                     return key;
                 } catch (e) {
@@ -473,18 +510,18 @@
                 let sharedWithEveryone = true;
 
                 for (const participant of participants) {
-                    const publicKey = participant.id === USER_ID
-                        ? userKeys.publicKey
-                        : await getUserPublicKey(participant.id);
+                    const devices = await getUserDevices(participant.id);
 
-                    if (!publicKey) {
+                    if (devices.length === 0) {
                         sharedWithEveryone = false;
                         continue;
                     }
 
-                    const wrapped = await wrapRoomKey(roomKey, publicKey);
-                    const stored = await storeRoomKey(participant.id, wrapped);
-                    sharedWithEveryone = sharedWithEveryone && stored;
+                    for (const device of devices) {
+                        const wrapped = await wrapRoomKey(roomKey, device.public_key);
+                        const stored = await storeRoomKey(participant.id, device.device_id, wrapped);
+                        sharedWithEveryone = sharedWithEveryone && stored;
+                    }
                 }
 
                 return sharedWithEveryone;

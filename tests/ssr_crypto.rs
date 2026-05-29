@@ -132,6 +132,53 @@ async fn crypto_public_key_store_and_retrieve() {
         resp["public_key"].as_str().unwrap(),
         r#"{"kty":"RSA","n":"test"}"#
     );
+    assert_eq!(
+        resp["devices"][0]["device_id"].as_str().unwrap(),
+        "legacy-1"
+    );
+}
+
+#[tokio::test]
+async fn crypto_device_registration_lists_multiple_devices() {
+    let app = test_app().await;
+
+    let login_alice = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "email=alice@example.com&password=alice-password",
+        ))
+        .unwrap();
+    let (_, _, _, set_cookie) = request(app.clone(), login_alice).await;
+    let alice_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    for (device_id, key) in [("alice-laptop", "key-1"), ("alice-phone", "key-2")] {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/crypto/devices")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from(format!(
+                r#"{{"device_id":"{device_id}","device_name":"test device","public_key":"{key}"}}"#
+            )))
+            .unwrap();
+        let (status, _, _, _) = request(app.clone(), req).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let (status, body, _, _) = request(
+        app,
+        Request::builder()
+            .uri("/api/crypto/devices")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let resp: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["devices"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -158,18 +205,6 @@ async fn crypto_room_key_store_and_retrieve() {
         .unwrap();
     let (_, _, _, _) = request(app.clone(), create_req).await;
 
-    let store_req = Request::builder()
-        .method("POST")
-        .uri("/api/crypto/room-key/2")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, &alice_cookie)
-        .body(Body::from(
-            r#"{"user_id":2,"encrypted_key":"wrapped-key-123"}"#,
-        ))
-        .unwrap();
-    let (status, _, _, _) = request(app.clone(), store_req).await;
-    assert_eq!(status, StatusCode::OK);
-
     let login_bob = Request::builder()
         .method("POST")
         .uri("/login")
@@ -178,6 +213,40 @@ async fn crypto_room_key_store_and_retrieve() {
         .unwrap();
     let (_, _, _, set_cookie) = request(app.clone(), login_bob).await;
     let bob_cookie = cookie_value(set_cookie.as_deref().unwrap());
+
+    for (device_id, public_key) in [
+        ("bob-phone", "bob-phone-public-key"),
+        ("bob-laptop", "bob-laptop-public-key"),
+    ] {
+        let register_bob_device = Request::builder()
+            .method("POST")
+            .uri("/api/crypto/devices")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &bob_cookie)
+            .body(Body::from(format!(
+                r#"{{"device_id":"{device_id}","device_name":"Bob device","public_key":"{public_key}"}}"#
+            )))
+            .unwrap();
+        let (status, _, _, _) = request(app.clone(), register_bob_device).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    for (device_id, encrypted_key) in [
+        ("bob-phone", "wrapped-phone-key"),
+        ("bob-laptop", "wrapped-laptop-key"),
+    ] {
+        let store_req = Request::builder()
+            .method("POST")
+            .uri("/api/crypto/room-key/2")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &alice_cookie)
+            .body(Body::from(format!(
+                r#"{{"user_id":2,"device_id":"{device_id}","encrypted_key":"{encrypted_key}"}}"#
+            )))
+            .unwrap();
+        let (status, _, _, _) = request(app.clone(), store_req).await;
+        assert_eq!(status, StatusCode::OK);
+    }
 
     let (status, body, _, _) = request(
         app,
@@ -190,7 +259,17 @@ async fn crypto_room_key_store_and_retrieve() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let resp: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(resp["encrypted_key"].as_str().unwrap(), "wrapped-key-123");
+    assert!(resp["encrypted_key"].as_str().is_some());
+    let keys = resp["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 2);
+    assert!(keys.iter().any(|key| {
+        key["device_id"].as_str() == Some("bob-phone")
+            && key["encrypted_key"].as_str() == Some("wrapped-phone-key")
+    }));
+    assert!(keys.iter().any(|key| {
+        key["device_id"].as_str() == Some("bob-laptop")
+            && key["encrypted_key"].as_str() == Some("wrapped-laptop-key")
+    }));
 }
 
 #[tokio::test]

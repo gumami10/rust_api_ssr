@@ -4,8 +4,11 @@ use crate::error::AppError;
 use crate::handlers::chat::{
     ChatEvent, ChatParticipant, ChatRoomRow, ChatRoomView, PendingInviteRow, PendingInviteView,
 };
+use crate::models::chat::{RoomDeviceKey, UserDevice};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+
+const MAX_DEVICES_PER_USER: i64 = 5;
 
 #[derive(Clone)]
 pub struct ChatService {
@@ -328,13 +331,118 @@ impl ChatService {
 
     // ---- E2E encryption helpers ----
 
+    pub async fn register_device(
+        &self,
+        user_id: i64,
+        device_id: &str,
+        device_name: Option<&str>,
+        public_key: &str,
+    ) -> Result<(), AppError> {
+        let existing = sqlx::query_as::<_, (i64,)>(
+            "SELECT 1 FROM user_devices WHERE user_id = ? AND device_id = ?",
+        )
+        .bind(user_id)
+        .bind(device_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+
+        if existing.is_none() {
+            let device_count =
+                sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM user_devices WHERE user_id = ?")
+                    .bind(user_id)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(AppError::Database)?
+                    .0;
+
+            if device_count >= MAX_DEVICES_PER_USER {
+                return Err(AppError::Conflict(format!(
+                    "Maximum of {MAX_DEVICES_PER_USER} devices reached."
+                )));
+            }
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO user_devices (user_id, device_id, device_name, public_key)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, device_id) DO UPDATE SET
+                device_name = excluded.device_name,
+                public_key = excluded.public_key,
+                last_seen_at = CURRENT_TIMESTAMP
+            "#,
+        )
+        .bind(user_id)
+        .bind(device_id)
+        .bind(device_name)
+        .bind(public_key)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+        Ok(())
+    }
+
+    pub async fn get_user_devices(
+        &self,
+        _ctx: QueryContext,
+        user_id: i64,
+    ) -> Result<Vec<UserDevice>, AppError> {
+        let devices = sqlx::query_as::<_, UserDevice>(
+            r#"
+            SELECT id, user_id, device_id, device_name, public_key, created_at, last_seen_at
+            FROM user_devices
+            WHERE user_id = ?
+            ORDER BY created_at, id
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+        Ok(devices)
+    }
+
+    pub async fn delete_device(&self, user_id: i64, device_id: &str) -> Result<(), AppError> {
+        sqlx::query("DELETE FROM chat_room_device_keys WHERE user_id = ? AND device_id = ?")
+            .bind(user_id)
+            .bind(device_id)
+            .execute(&self.pool)
+            .await
+            .map_err(AppError::Database)?;
+
+        sqlx::query("DELETE FROM user_devices WHERE user_id = ? AND device_id = ?")
+            .bind(user_id)
+            .bind(device_id)
+            .execute(&self.pool)
+            .await
+            .map_err(AppError::Database)?;
+        Ok(())
+    }
+
+    pub async fn update_device_last_seen(
+        &self,
+        user_id: i64,
+        device_id: &str,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE user_devices SET last_seen_at = CURRENT_TIMESTAMP WHERE user_id = ? AND device_id = ?",
+        )
+        .bind(user_id)
+        .bind(device_id)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+        Ok(())
+    }
+
     pub async fn get_public_key(
         &self,
         _ctx: QueryContext,
         user_id: i64,
     ) -> Result<Option<String>, AppError> {
         let row = sqlx::query_as::<_, (String,)>(
-            "SELECT public_key FROM user_public_keys WHERE user_id = ?",
+            "SELECT public_key FROM user_devices WHERE user_id = ? ORDER BY created_at, id LIMIT 1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -344,19 +452,9 @@ impl ChatService {
     }
 
     pub async fn store_public_key(&self, user_id: i64, public_key: &str) -> Result<(), AppError> {
-        sqlx::query(
-            r#"
-            INSERT INTO user_public_keys (user_id, public_key)
-            VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET public_key = excluded.public_key
-            "#,
-        )
-        .bind(user_id)
-        .bind(public_key)
-        .execute(&self.pool)
-        .await
-        .map_err(AppError::Database)?;
-        Ok(())
+        let device_id = format!("legacy-{user_id}");
+        self.register_device(user_id, &device_id, Some("Legacy device"), public_key)
+            .await
     }
 
     pub async fn get_encrypted_room_key(
@@ -366,7 +464,7 @@ impl ChatService {
         user_id: i64,
     ) -> Result<Option<String>, AppError> {
         let row = sqlx::query_as::<_, (String,)>(
-            "SELECT encrypted_key FROM chat_room_keys WHERE room_id = ? AND user_id = ?",
+            "SELECT encrypted_key FROM chat_room_device_keys WHERE room_id = ? AND user_id = ? ORDER BY created_at, device_id LIMIT 1",
         )
         .bind(room_id)
         .bind(user_id)
@@ -382,15 +480,86 @@ impl ChatService {
         user_id: i64,
         encrypted_key: &str,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        let Some(device) = self.get_primary_device(user_id).await? else {
+            return Err(AppError::NotFound("Target device not found.".to_string()));
+        };
+
+        self.store_encrypted_room_device_key(room_id, user_id, &device.device_id, encrypted_key)
+            .await
+    }
+
+    async fn get_primary_device(&self, user_id: i64) -> Result<Option<UserDevice>, AppError> {
+        let device = sqlx::query_as::<_, UserDevice>(
             r#"
-            INSERT INTO chat_room_keys (room_id, user_id, encrypted_key)
-            VALUES (?, ?, ?)
-            ON CONFLICT(room_id, user_id) DO UPDATE SET encrypted_key = excluded.encrypted_key
+            SELECT id, user_id, device_id, device_name, public_key, created_at, last_seen_at
+            FROM user_devices
+            WHERE user_id = ?
+            ORDER BY created_at, id
+            LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+        Ok(device)
+    }
+
+    pub async fn get_encrypted_room_device_keys(
+        &self,
+        _ctx: QueryContext,
+        room_id: i64,
+        user_id: i64,
+    ) -> Result<Vec<RoomDeviceKey>, AppError> {
+        let keys = sqlx::query_as::<_, RoomDeviceKey>(
+            r#"
+            SELECT device_id, encrypted_key
+            FROM chat_room_device_keys
+            WHERE room_id = ? AND user_id = ?
+            ORDER BY created_at, device_id
             "#,
         )
         .bind(room_id)
         .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+        Ok(keys)
+    }
+
+    pub async fn device_belongs_to_user(
+        &self,
+        user_id: i64,
+        device_id: &str,
+    ) -> Result<bool, AppError> {
+        let row = sqlx::query_as::<_, (i64,)>(
+            "SELECT 1 FROM user_devices WHERE user_id = ? AND device_id = ?",
+        )
+        .bind(user_id)
+        .bind(device_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
+        Ok(row.is_some())
+    }
+
+    pub async fn store_encrypted_room_device_key(
+        &self,
+        room_id: i64,
+        user_id: i64,
+        device_id: &str,
+        encrypted_key: &str,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO chat_room_device_keys (room_id, user_id, device_id, encrypted_key)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(room_id, user_id, device_id) DO UPDATE SET encrypted_key = excluded.encrypted_key
+            "#,
+        )
+        .bind(room_id)
+        .bind(user_id)
+        .bind(device_id)
         .bind(encrypted_key)
         .execute(&self.pool)
         .await
@@ -420,12 +589,13 @@ impl ChatService {
         _ctx: QueryContext,
         room_id: i64,
     ) -> Result<Vec<i64>, AppError> {
-        let rows =
-            sqlx::query_as::<_, (i64,)>("SELECT user_id FROM chat_room_keys WHERE room_id = ?")
-                .bind(room_id)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(AppError::Database)?;
+        let rows = sqlx::query_as::<_, (i64,)>(
+            "SELECT DISTINCT user_id FROM chat_room_device_keys WHERE room_id = ?",
+        )
+        .bind(room_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::Database)?;
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 }

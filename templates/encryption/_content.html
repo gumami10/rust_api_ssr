@@ -169,7 +169,7 @@
                     <span class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-400/20 text-sm font-bold text-indigo-300">2</span>
                     <h3 class="text-lg font-semibold text-indigo-100">Public Key Upload</h3>
                 </div>
-                <p class="mt-2 pl-11 text-sm text-slate-400">Both upload their public keys to the server via <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">POST /api/crypto/public-key</code>. The server stores them in the <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">user_public_keys</code> table.</p>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Each browser device uploads its public key to the server via <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">POST /api/crypto/devices</code>. The server stores per-device public keys in the <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">user_devices</code> table.</p>
             </div>
 
             <div class="rounded-2xl border border-indigo-400/20 bg-indigo-400/5 p-5">
@@ -177,7 +177,7 @@
                     <span class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-400/20 text-sm font-bold text-indigo-300">3</span>
                     <h3 class="text-lg font-semibold text-indigo-100">Fetch Recipient's Public Key</h3>
                 </div>
-                <p class="mt-2 pl-11 text-sm text-slate-400">Alice fetches Bob's public key via <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">GET /api/crypto/public-key/:userId</code> so she can securely share the room key with him.</p>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Alice fetches Bob's registered device public keys via <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-indigo-300">GET /api/crypto/public-key/:userId</code> so she can securely share the room key with each device.</p>
             </div>
 
             <div class="rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-5">
@@ -193,7 +193,7 @@
                     <span class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/20 text-sm font-bold text-emerald-300">5</span>
                     <h3 class="text-lg font-semibold text-emerald-100">Room Key Distribution</h3>
                 </div>
-                <p class="mt-2 pl-11 text-sm text-slate-400">Alice encrypts (wraps) the room key with Bob's public key using RSA-OAEP and uploads it to the server. The server stores it in <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-emerald-300">chat_room_keys</code>. Only Bob can unwrap it.</p>
+                <p class="mt-2 pl-11 text-sm text-slate-400">Alice encrypts (wraps) the room key with each registered device public key using RSA-OAEP and uploads those wrapped copies to the server. The server stores them in <code class="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-emerald-300">chat_room_device_keys</code>. Only the matching device can unwrap its copy.</p>
             </div>
 
             <div class="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-5">

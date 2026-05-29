@@ -128,31 +128,37 @@ pub async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
 
     sqlx::query(
         r#"
-        CREATE TABLE user_public_keys (
-            user_id INTEGER PRIMARY KEY,
+        CREATE TABLE user_devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            device_id TEXT NOT NULL,
+            device_name TEXT,
             public_key TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, device_id)
         )
         "#,
     )
     .execute(&pool)
     .await
-    .expect("create user_public_keys table");
+    .expect("create user_devices table");
 
     sqlx::query(
         r#"
-        CREATE TABLE chat_room_keys (
+        CREATE TABLE chat_room_device_keys (
             room_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
+            device_id TEXT NOT NULL,
             encrypted_key TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (room_id, user_id)
+            PRIMARY KEY (room_id, user_id, device_id)
         )
         "#,
     )
     .execute(&pool)
     .await
-    .expect("create chat_room_keys table");
+    .expect("create chat_room_device_keys table");
 
     sqlx::query(
         r#"
@@ -258,7 +264,11 @@ pub async fn get(app: Router, uri: &str) -> (StatusCode, Vec<u8>) {
     (status, body)
 }
 
-pub async fn post_form(app: Router, uri: &str, form: &str) -> (StatusCode, Vec<u8>, Option<String>) {
+pub async fn post_form(
+    app: Router,
+    uri: &str,
+    form: &str,
+) -> (StatusCode, Vec<u8>, Option<String>) {
     let (status, body, location, _) = request(
         app,
         Request::builder()
