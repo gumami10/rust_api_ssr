@@ -31,7 +31,19 @@
                 </button>
                 {% endif %}
             </div>
+            <p class="text-xs text-slate-500">Used only for login, never shown publicly.</p>
             {% match form.email_error %}
+            {% when Some with (message) %}
+                <p class="text-sm text-rose-300">{{ message }}</p>
+            {% when None %}
+            {% endmatch %}
+        </div>
+
+        <div class="space-y-2">
+            <label class="text-sm font-semibold text-slate-200" for="nickname">Nickname <span class="font-normal text-slate-400">(optional)</span></label>
+            <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="nickname" name="nickname" value="{{ form.nickname }}" placeholder="e.g. CoolGuy" autocomplete="nickname">
+            <p class="text-xs text-slate-500">A unique tag like #1234 is appended automatically. Shown instead of your real name.</p>
+            {% match form.nickname_error %}
             {% when Some with (message) %}
                 <p class="text-sm text-rose-300">{{ message }}</p>
             {% when None %}

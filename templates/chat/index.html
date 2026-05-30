@@ -8,7 +8,7 @@
             <p class="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300/80">Realtime</p>
             <h1 class="mt-3 text-4xl font-black tracking-tight text-white sm:text-5xl">Chat rooms</h1>
             <p class="mt-4 max-w-3xl text-base leading-7 text-slate-300">
-                Signed in as <strong class="text-white">{{ user.name }}</strong>.
+                Signed in as <strong class="text-white">{% match user.nickname %}{% when Some with (nick) %}{{ nick }}{% when None %}{{ user.name }}{% endmatch %}</strong>.
                 The general room is open to every logged-in user, while private rooms stay limited to invited participants.
             </p>
 
@@ -29,7 +29,7 @@
         </div>
 
         <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <section class="flex flex-col rounded-3xl border border-white/10 bg-slate-900/75 p-4 shadow-lg shadow-slate-950/25 sm:p-6 h-[calc(100vh-12rem)] min-h-0 max-xl:min-h-[48rem]">
+            <section class="flex flex-col rounded-3xl border border-white/10 bg-slate-900/75 p-4 shadow-lg shadow-slate-950/25 sm:p-6 h-[calc(100vh-6rem)] min-h-0 max-xl:min-h-[60rem]">
                 <div class="mb-4 flex items-center justify-between gap-3 shrink-0">
                     <div>
                         <p class="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-300/80">Room</p>
@@ -145,8 +145,7 @@
                         <ul class="space-y-2">
                             {% for participant in participants %}
                                 <li class="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                                    <strong class="block text-sm text-slate-100">{{ participant.name }}</strong>
-                                    <span class="block text-xs text-slate-400">{{ participant.email }}</span>
+                                    <strong class="block text-sm text-slate-100">{% match participant.nickname %}{% when Some with (nick) %}{{ nick }}{% when None %}{{ participant.name }}{% endmatch %}</strong>
                                 </li>
                             {% endfor %}
                         </ul>
@@ -163,14 +162,21 @@
                         {% if available_invitees.is_empty() %}
                             <p class="text-sm text-slate-400">There is nobody else left to invite right now.</p>
                         {% else %}
-                            <form method="post" action="/chat/rooms/{{ room.id }}/invites" class="space-y-3">
-                                <label class="block text-sm font-semibold text-slate-200" for="invite-user-id">Choose user</label>
-                                <select class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="invite-user-id" name="user_id">
+                            <form method="post" action="/chat/rooms/{{ room.id }}/invites" class="space-y-3" id="invite-form">
+                                <div class="space-y-2">
+                                    <label class="block text-sm font-semibold text-slate-200" for="invite-search">Search user</label>
+                                    <input class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20" id="invite-search" type="text" placeholder="Type to search..." autocomplete="off">
+                                </div>
+                                <input type="hidden" name="user_id" id="invite-user-id" value="">
+                                <ul id="invite-user-list" class="max-h-40 space-y-1 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/70 p-2">
                                     {% for candidate in available_invitees %}
-                                        <option value="{{ candidate.id }}">{{ candidate.name }} ({{ candidate.email }})</option>
+                                        <li class="invite-candidate cursor-pointer rounded-xl px-3 py-2 text-sm text-slate-200 transition hover:bg-cyan-400/10" data-id="{{ candidate.id }}" data-name="{% match candidate.nickname %}{% when Some with (nick) %}{{ nick }}{% when None %}{{ candidate.name }}{% endmatch %}">
+                                            <span class="font-medium">{% match candidate.nickname %}{% when Some with (nick) %}{{ nick }}{% when None %}{{ candidate.name }}{% endmatch %}</span>
+                                        </li>
                                     {% endfor %}
-                                </select>
-                                <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit">Send invite</button>
+                                </ul>
+                                <p id="invite-selected-name" class="text-sm text-cyan-200 hidden"></p>
+                                <button class="inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:scale-[1.01]" type="submit" id="invite-submit-btn" disabled>Send invite</button>
                             </form>
                         {% endif %}
                     </section>
@@ -200,8 +206,7 @@
                                         <label class="flex items-center gap-3 rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-sm text-slate-200">
                                             <input class="h-4 w-4 rounded border-white/20 bg-slate-950 text-cyan-400 focus:ring-cyan-400/30" type="checkbox" data-participant-checkbox value="{{ candidate.id }}">
                                             <span class="min-w-0">
-                                                <span class="block font-medium">{{ candidate.name }}</span>
-                                                <span class="block text-xs text-slate-400">{{ candidate.email }}</span>
+                                                <span class="block font-medium">{% match candidate.nickname %}{% when Some with (nick) %}{{ nick }}{% when None %}{{ candidate.name }}{% endmatch %}</span>
                                             </span>
                                         </label>
                                     {% endfor %}
@@ -505,6 +510,8 @@
                 }
             }
 
+            const sharedDeviceKeys = new Set();
+
             async function shareRoomKeyWithParticipants() {
                 if (!roomKey) return false;
                 let sharedWithEveryone = true;
@@ -518,8 +525,13 @@
                     }
 
                     for (const device of devices) {
+                        const key = `${participant.id}:${device.device_id}`;
+                        if (sharedDeviceKeys.has(key)) continue;
                         const wrapped = await wrapRoomKey(roomKey, device.public_key);
                         const stored = await storeRoomKey(participant.id, device.device_id, wrapped);
+                        if (stored) {
+                            sharedDeviceKeys.add(key);
+                        }
                         sharedWithEveryone = sharedWithEveryone && stored;
                     }
                 }
@@ -580,26 +592,37 @@
 
             // ---- Polling for 1-to-1 key exchange ----
             if (IS_ENCRYPTED) {
-                const e2ePollInterval = setInterval(async () => {
+                let e2eFullyShared = false;
+                let e2ePollDelay = 5000;
+                const e2ePoll = async () => {
                     const serverKey = (!isRoomKeyOwner || !roomKey) ? await loadServerRoomKey() : null;
                     if (serverKey && !(await roomKeysMatch(roomKey, serverKey))) {
                         roomKey = serverKey;
+                        sharedDeviceKeys.clear();
+                        e2eFullyShared = false;
                         setE2eBadge("E2E Ready");
                         await decryptRenderedMessages();
                     }
 
                     if (isRoomKeyOwner && roomKey) {
-                        try {
-                            const shared = await shareRoomKeyWithParticipants();
-                            setE2eBadge(shared ? "E2E Ready" : "E2E Waiting for key");
-                        } catch (e) {
-                            console.error("Failed to share room key", e);
-                            setE2eBadge("E2E Waiting for key");
+                        if (!e2eFullyShared) {
+                            try {
+                                const shared = await shareRoomKeyWithParticipants();
+                                setE2eBadge(shared ? "E2E Ready" : "E2E Waiting for key");
+                                if (shared) e2eFullyShared = true;
+                            } catch (e) {
+                                console.error("Failed to share room key", e);
+                                setE2eBadge("E2E Waiting for key");
+                            }
                         }
                     } else if (!roomKey) {
                         setE2eBadge("E2E Pending");
                     }
-                }, 3000);
+
+                    e2ePollDelay = e2eFullyShared ? Math.min(e2ePollDelay * 2, 60000) : 5000;
+                    setTimeout(e2ePoll, e2ePollDelay);
+                };
+                setTimeout(e2ePoll, e2ePollDelay);
             }
 
             // ---- Chat UI helpers ----
@@ -712,7 +735,8 @@
                         appendMessage(data);
                         typingUsers.delete(data.user_name);
                         updateTypingDisplay();
-
+                    } else if (data.type === "room_change") {
+                        window.location.reload();
                     }
                 } catch (_) {
                     // Ignore malformed frames.
@@ -817,6 +841,43 @@
                         createRoomForm.querySelectorAll('input[data-participant-checkbox]:checked')
                     ).map((checkbox) => checkbox.value);
                     roomParticipantIds.value = selectedIds.join(",");
+                });
+            }
+
+            const inviteSearch = document.getElementById("invite-search");
+            const inviteList = document.getElementById("invite-user-list");
+            const inviteUserId = document.getElementById("invite-user-id");
+            const inviteSelectedName = document.getElementById("invite-selected-name");
+            const inviteSubmitBtn = document.getElementById("invite-submit-btn");
+            const inviteForm = document.getElementById("invite-form");
+
+            if (inviteSearch && inviteList && inviteUserId && inviteForm) {
+                const candidates = Array.from(inviteList.querySelectorAll(".invite-candidate"));
+
+                inviteSearch.addEventListener("input", () => {
+                    const query = inviteSearch.value.toLowerCase().trim();
+                    candidates.forEach((li) => {
+                        const name = (li.dataset.name || "").toLowerCase();
+                        li.style.display = name.includes(query) ? "" : "none";
+                    });
+                });
+
+                candidates.forEach((li) => {
+                    li.addEventListener("click", () => {
+                        inviteUserId.value = li.dataset.id;
+                        inviteSearch.value = li.dataset.name;
+                        if (inviteSelectedName) {
+                            inviteSelectedName.textContent = "Selected: " + li.dataset.name;
+                            inviteSelectedName.classList.remove("hidden");
+                        }
+                        if (inviteSubmitBtn) inviteSubmitBtn.disabled = false;
+                    });
+                });
+
+                inviteForm.addEventListener("submit", (e) => {
+                    if (!inviteUserId.value) {
+                        e.preventDefault();
+                    }
                 });
             }
 

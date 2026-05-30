@@ -31,12 +31,11 @@
             {% for user in users %}
                 <li class="group rounded-3xl border border-white/10 bg-slate-900/75 p-5 shadow-lg shadow-slate-950/25 transition hover:-translate-y-0.5 hover:border-cyan-400/30 hover:bg-slate-900/90">
                     <div class="space-y-2">
-                        <a href="/users/{{ user.id }}"><strong>{{ user.name }}</strong></a>
+                        <a href="/users/{{ user.id }}"><strong>{% match user.nickname %}{% when Some with (nick) %}{{ nick }}{% when None %}{{ user.name }}{% endmatch %}</strong></a>
                         <div class="flex items-center justify-between gap-3">
                             <span class="text-lg font-semibold text-white group-hover:text-cyan-200"></span>
                             <span class="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">Profile</span>
                         </div>
-                        <span class="block text-sm text-slate-400">{{ user.email }}</span>
                     </div>
                 </li>
             {% endfor %}

@@ -37,7 +37,7 @@ impl ChatService {
             SELECT
                 chat_messages.id,
                 chat_messages.room_id,
-                users.name AS user_name,
+                COALESCE(users.nickname, users.name) AS user_name,
                 chat_messages.body,
                 chat_messages.created_at,
                 chat_messages.kind,
@@ -77,7 +77,7 @@ impl ChatService {
 
         let participants = sqlx::query_as::<_, ChatParticipant>(
             r#"
-            SELECT users.id, users.name, users.email
+            SELECT users.id, users.name, users.nickname
             FROM chat_room_members
             INNER JOIN users ON users.id = chat_room_members.user_id
             WHERE chat_room_members.room_id = ?

@@ -104,6 +104,7 @@ async fn handle_socket(
                 let should_forward = match &broadcasted {
                     Ok(BroadcastEvent::Message(event)) => event.room_id == room_id,
                     Ok(BroadcastEvent::Typing { room_id: rid, .. }) => *rid == room_id,
+                    Ok(BroadcastEvent::RoomChange { target_user_id }) => *target_user_id == user.id,
                     Err(_) => false,
                 };
                 match broadcasted {

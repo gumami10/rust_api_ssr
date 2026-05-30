@@ -72,6 +72,8 @@ pub struct UserForm {
     email: String,
     #[serde(default)]
     password: String,
+    #[serde(default)]
+    nickname: String,
 }
 
 #[derive(Debug, Clone)]
@@ -81,9 +83,11 @@ struct UserFormView {
     name: String,
     email: String,
     password: String,
+    nickname: String,
     name_error: Option<String>,
     email_error: Option<String>,
     password_error: Option<String>,
+    nickname_error: Option<String>,
     show_password: bool,
 }
 
@@ -95,9 +99,11 @@ impl UserFormView {
             name: String::new(),
             email: String::new(),
             password: String::new(),
+            nickname: String::new(),
             name_error: None,
             email_error: None,
             password_error: None,
+            nickname_error: None,
             show_password: true,
         }
     }
@@ -109,9 +115,11 @@ impl UserFormView {
             name: user.name.clone(),
             email: user.email.clone(),
             password: String::new(),
+            nickname: user.nickname.clone().unwrap_or_default(),
             name_error: None,
             email_error: None,
             password_error: None,
+            nickname_error: None,
             show_password: false,
         }
     }
@@ -124,15 +132,18 @@ impl UserFormView {
     ) -> Result<Self, Self> {
         let name = form.name.trim().to_string();
         let email = form.email.trim().to_string();
+        let nickname = form.nickname.trim().to_string();
         let mut view = Self {
             action: action.into(),
             submit_label: submit_label.into(),
             name,
             email,
             password: form.password.trim().to_string(),
+            nickname,
             name_error: None,
             email_error: None,
             password_error: None,
+            nickname_error: None,
             show_password,
         };
 
@@ -146,6 +157,10 @@ impl UserFormView {
             view.email_error = Some("Email must contain @.".to_string());
         }
 
+        if !view.nickname.is_empty() && view.nickname.contains('#') {
+            view.nickname_error = Some("Nickname cannot contain #.".to_string());
+        }
+
         if show_password {
             if view.password.is_empty() {
                 view.password_error = Some("Password is required.".to_string());
@@ -157,6 +172,7 @@ impl UserFormView {
         if view.name_error.is_some()
             || view.email_error.is_some()
             || view.password_error.is_some()
+            || view.nickname_error.is_some()
         {
             Err(view)
         } else {
@@ -250,6 +266,7 @@ pub async fn create_user(
             name: form.name.clone(),
             email: form.email.clone(),
             password: form.password.clone(),
+            nickname: if form.nickname.is_empty() { None } else { Some(form.nickname.clone()) },
         })
         .await
     {
@@ -329,6 +346,7 @@ pub async fn update_user(
             UpdateUser {
                 name: form.name.clone(),
                 email: form.email.clone(),
+                nickname: if form.nickname.is_empty() { None } else { Some(form.nickname.clone()) },
             },
         )
         .await

@@ -52,12 +52,23 @@ impl UserService {
 
         let hashed_password =
             hash_password(&user.password).map_err(|err| UserServiceError::PasswordHash(err.to_string()))?;
+
+        let nickname = user.nickname.and_then(|n| {
+            let trimmed = n.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(generate_nickname(&trimmed))
+            }
+        });
+
         Ok(self
             .user_repo
             .create_user(NewUser {
                 name: user.name,
                 email: user.email,
                 password: hashed_password,
+                nickname,
             })
             .await?)
     }
@@ -82,7 +93,22 @@ impl UserService {
             return Err(UserServiceError::DuplicateEmail);
         }
 
-        Ok(self.user_repo.update_user(id, user).await?)
+        let nickname = user.nickname.and_then(|n| {
+            let trimmed = n.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else if current_user.nickname.as_deref() == Some(&trimmed) {
+                Some(trimmed)
+            } else {
+                Some(generate_nickname(&trimmed))
+            }
+        });
+
+        Ok(self.user_repo.update_user(id, UpdateUser {
+            name: user.name,
+            email: user.email,
+            nickname,
+        }).await?)
     }
 
     pub async fn delete_user(&self, id: i64) -> Result<bool, UserServiceError> {
@@ -111,6 +137,7 @@ impl UserService {
             id: user.id,
             name: user.name,
             email: user.email,
+            nickname: user.nickname,
         })
     }
 
@@ -128,7 +155,7 @@ impl UserService {
 
         let user = sqlx::query_as::<_, User>(
             r#"
-            SELECT users.id, users.name, users.email
+            SELECT users.id, users.name, users.email, users.nickname
             FROM sessions
             INNER JOIN users ON users.id = sessions.user_id
             WHERE sessions.token = ?
@@ -169,7 +196,7 @@ impl UserService {
 
         if !missing.is_empty() {
             let placeholders = missing.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-            let query = format!("SELECT id, name, email FROM users WHERE id IN ({})", placeholders);
+            let query = format!("SELECT id, name, email, nickname FROM users WHERE id IN ({})", placeholders);
             let mut request = sqlx::query_as::<_, User>(&query);
 
             for id in &missing {
@@ -191,4 +218,14 @@ pub fn hash_password(password: &str) -> Result<String, password_hash::Error> {
     let salt = SaltString::generate(&mut OsRng);
     let hashed = Argon2::default().hash_password(password.as_bytes(), &salt)?;
     Ok(hashed.to_string())
+}
+
+pub fn generate_nickname(base: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let random = nanos % 10000;
+    format!("{}#{:04}", base, random)
 }

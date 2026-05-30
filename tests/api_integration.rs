@@ -29,7 +29,8 @@ async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL
+            password_hash TEXT NOT NULL,
+            nickname TEXT
         )
         "#,
     )
@@ -147,9 +148,7 @@ async fn list_users_returns_seeded_users_as_json() {
 
     assert_eq!(users.len(), 2);
     assert_eq!(users[0].name, "Alice");
-    assert_eq!(users[0].email, "alice@example.com");
     assert_eq!(users[1].name, "Bob");
-    assert_eq!(users[1].email, "bob@example.com");
 }
 
 #[tokio::test]
@@ -161,7 +160,6 @@ async fn get_user_returns_matching_user_as_json() {
     let user: User = serde_json::from_slice(&body).expect("valid user json");
     assert_eq!(user.id, 1);
     assert_eq!(user.name, "Alice");
-    assert_eq!(user.email, "alice@example.com");
 }
 
 #[tokio::test]
@@ -198,9 +196,7 @@ async fn index_page_renders_seeded_users() {
     let html = String::from_utf8(body).expect("valid utf-8 html");
     assert!(html.contains("<title>Users List</title>"));
     assert!(html.contains("<strong>Alice</strong>"));
-    assert!(html.contains("alice@example.com"));
     assert!(html.contains("<strong>Bob</strong>"));
-    assert!(html.contains("bob@example.com"));
 }
 
 #[tokio::test]

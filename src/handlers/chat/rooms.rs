@@ -267,6 +267,10 @@ pub async fn invite_to_room(
         .invalidate_pending_invites(invited_user.id)
         .await;
 
+    let _ = state.chat_tx.send(BroadcastEvent::RoomChange {
+        target_user_id: invited_user.id,
+    });
+
     Ok(Redirect::to(&room.path).into_response())
 }
 
@@ -345,6 +349,10 @@ pub async fn accept_invite(
     {
         let _ = state.chat_tx.send(BroadcastEvent::Message(event));
     }
+
+    let _ = state.chat_tx.send(BroadcastEvent::RoomChange {
+        target_user_id: user.id,
+    });
 
     Ok(Redirect::to(&room_path(invite.room_id, false)).into_response())
 }
@@ -441,7 +449,7 @@ fn available_invitees(
 fn default_room_name(participants: &[User]) -> String {
     let joined_names = participants
         .iter()
-        .map(|user| user.name.as_str())
+        .map(|user| user.display_name())
         .collect::<Vec<_>>()
         .join(", ");
     format!("Chat with {}", joined_names)

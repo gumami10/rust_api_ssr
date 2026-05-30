@@ -28,7 +28,8 @@ pub async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL
+            password_hash TEXT NOT NULL,
+            nickname TEXT
         )
         "#,
     )

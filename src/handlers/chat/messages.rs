@@ -38,7 +38,7 @@ pub async fn persist_message(
     Ok(ChatEvent {
         id,
         room_id,
-        user_name: user.name.clone(),
+        user_name: user.display_name().to_string(),
         body: body.to_string(),
         created_at: created_at.0,
         kind: "user".to_string(),
@@ -85,7 +85,7 @@ pub async fn persist_message_with_file(
     Ok(ChatEvent {
         id,
         room_id,
-        user_name: user.name.clone(),
+        user_name: user.display_name().to_string(),
         body: body.to_string(),
         created_at: created_at.0,
         kind: "user".to_string(),
@@ -124,7 +124,7 @@ pub async fn persist_notification(
     Ok(ChatEvent {
         id,
         room_id,
-        user_name: user.name.clone(),
+        user_name: user.display_name().to_string(),
         body: body.to_string(),
         created_at: created_at.0,
         kind: "notification".to_string(),

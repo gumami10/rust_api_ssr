@@ -57,6 +57,10 @@ pub enum BroadcastEvent {
         user_name: String,
         is_typing: bool,
     },
+    #[serde(rename = "room_change")]
+    RoomChange {
+        target_user_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -85,7 +89,7 @@ pub struct ChatRoomView {
 pub struct ChatParticipant {
     pub id: i64,
     pub name: String,
-    pub email: String,
+    pub nickname: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]

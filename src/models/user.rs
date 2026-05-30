@@ -6,7 +6,15 @@ use sqlx::{FromRow, SqlitePool};
 pub struct User {
     pub id: i64,
     pub name: String,
+    #[serde(skip_serializing, default)]
     pub email: String,
+    pub nickname: Option<String>,
+}
+
+impl User {
+    pub fn display_name(&self) -> &str {
+        self.nickname.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -14,12 +22,14 @@ pub struct NewUser {
     pub name: String,
     pub email: String,
     pub password: String,
+    pub nickname: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct UpdateUser {
     pub name: String,
     pub email: String,
+    pub nickname: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -28,6 +38,7 @@ pub struct UserWithPassword {
     pub name: String,
     pub email: String,
     pub password_hash: String,
+    pub nickname: Option<String>,
 }
 
 #[async_trait]
@@ -73,7 +84,7 @@ impl UserRepository for SqliteUserRepository {
         _ctx: crate::context::QueryContext,
         id: i64,
     ) -> Result<Option<User>, sqlx::Error> {
-        sqlx::query_as::<_, User>("SELECT id, name, email FROM users WHERE id = ?")
+        sqlx::query_as::<_, User>("SELECT id, name, email, nickname FROM users WHERE id = ?")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -84,7 +95,7 @@ impl UserRepository for SqliteUserRepository {
         _ctx: crate::context::QueryContext,
         email: &str,
     ) -> Result<Option<User>, sqlx::Error> {
-        sqlx::query_as::<_, User>("SELECT id, name, email FROM users WHERE email = ?")
+        sqlx::query_as::<_, User>("SELECT id, name, email, nickname FROM users WHERE email = ?")
             .bind(email)
             .fetch_optional(&self.pool)
             .await
@@ -96,7 +107,7 @@ impl UserRepository for SqliteUserRepository {
         email: &str,
     ) -> Result<Option<UserWithPassword>, sqlx::Error> {
         sqlx::query_as::<_, UserWithPassword>(
-            "SELECT id, name, email, password_hash FROM users WHERE email = ?",
+            "SELECT id, name, email, password_hash, nickname FROM users WHERE email = ?",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -107,16 +118,17 @@ impl UserRepository for SqliteUserRepository {
         &self,
         _ctx: crate::context::QueryContext,
     ) -> Result<Vec<User>, sqlx::Error> {
-        sqlx::query_as::<_, User>("SELECT id, name, email FROM users")
+        sqlx::query_as::<_, User>("SELECT id, name, email, nickname FROM users")
             .fetch_all(&self.pool)
             .await
     }
 
     async fn create_user(&self, user: NewUser) -> Result<User, sqlx::Error> {
-        let id = sqlx::query("INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)")
+        let id = sqlx::query("INSERT INTO users (name, email, password_hash, nickname) VALUES (?, ?, ?, ?)")
             .bind(user.name)
             .bind(user.email)
             .bind(user.password)
+            .bind(user.nickname)
             .execute(&self.pool)
             .await?
             .last_insert_rowid();
@@ -127,9 +139,10 @@ impl UserRepository for SqliteUserRepository {
     }
 
     async fn update_user(&self, id: i64, user: UpdateUser) -> Result<Option<User>, sqlx::Error> {
-        let result = sqlx::query("UPDATE users SET name = ?, email = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE users SET name = ?, email = ?, nickname = ? WHERE id = ?")
             .bind(user.name)
             .bind(user.email)
+            .bind(user.nickname)
             .bind(id)
             .execute(&self.pool)
             .await?;

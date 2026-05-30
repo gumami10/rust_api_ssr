@@ -25,9 +25,7 @@ async fn users_index_renders_at_root_and_canonical_path() {
         let html = String::from_utf8(body).expect("valid utf-8 html");
         assert!(html.contains("<title>Users List</title>"));
         assert!(html.contains(r#"<a href="/users/1"><strong>Alice</strong></a>"#));
-        assert!(html.contains("alice@example.com"));
         assert!(html.contains(r#"<a href="/users/2"><strong>Bob</strong></a>"#));
-        assert!(html.contains("bob@example.com"));
     }
 }
 
@@ -39,7 +37,6 @@ async fn user_detail_renders_existing_user() {
 
     let html = String::from_utf8(body).expect("valid utf-8 html");
     assert!(html.contains("<h1>Alice</h1>"));
-    assert!(html.contains("alice@example.com"));
     assert!(html.contains(r#"href="/users/1/edit""#));
 }
 
@@ -145,7 +142,6 @@ async fn edit_user_form_updates_existing_user() {
 
     let html = String::from_utf8(body).expect("valid utf-8 html");
     assert!(html.contains("<h1>Alice Updated</h1>"));
-    assert!(html.contains("alice.updated@example.com"));
 }
 
 #[tokio::test]

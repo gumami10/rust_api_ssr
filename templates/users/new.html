@@ -22,6 +22,7 @@
             name: () => faker.person.fullName(),
             email: () => faker.internet.email(),
             password: () => faker.internet.password({ length: 16 }),
+            nickname: () => faker.internet.username().replace(/[^a-zA-Z0-9_]/g, ""),
         };
 
         const dispatchValueChange = (input) => {
